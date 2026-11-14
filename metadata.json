@@ -1,0 +1,8 @@
+{
+  "name": "Babagiwa Farm Management System",
+  "description": "Operational farm recording and reporting platform for Babagiwa poultry layer production, feed inventory and historical costing, egg sales, and farm analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

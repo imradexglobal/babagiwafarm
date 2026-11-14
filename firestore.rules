@@ -1,0 +1,1037 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Global Helper Primitives
+    // -------------------------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function userEmailKey() {
+      return request.auth.token.email.lower().replace('[^a-z0-9]', '_');
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidDateStr(d) {
+      return d is string && d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidOptionalDateStr(d) {
+      return d is string && (d.size() == 0 || (d.size() == 10 && d.matches('^\\d{4}-\\d{2}-\\d{2}$')));
+    }
+
+    function isValidTimeStr(t) {
+      return t is string && (t.size() == 0 || (t.size() == 5 && t.matches('^\\d{2}:\\d{2}$')));
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // -------------------------------------------------------------------------
+    // Permission & Tenant Membership Gates
+    // -------------------------------------------------------------------------
+    function memberPath(farmId, uid) {
+      return /databases/$(database)/documents/farms/$(farmId)/members/$(uid);
+    }
+
+    function getMember(farmId) {
+      return get(memberPath(farmId, request.auth.uid));
+    }
+
+    function isActiveMember(farmId) {
+      return isEmailVerified()
+        && exists(memberPath(farmId, request.auth.uid))
+        && getMember(farmId).data.status == 'active';
+    }
+
+    function isFarmOwner(farmId) {
+      return isActiveMember(farmId)
+        && getMember(farmId).data.role == 'owner';
+    }
+
+    function hasCrudPerm(farmId, domain, action) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions[domain][action] == true
+      );
+    }
+
+    function canOverrideSalesPrice(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.sales.overridePrice == true
+      );
+    }
+
+    function canReadReports(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.reports.read == true
+      );
+    }
+
+    function canReadSettings(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.settings.read == true
+      );
+    }
+
+    function canEditSettings(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.settings.edit == true
+      );
+    }
+
+    function canReadMembers(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.members.read == true
+      );
+    }
+
+    function canManageMembers(farmId) {
+      return isActiveMember(farmId) && (
+        getMember(farmId).data.role == 'owner' ||
+        getMember(farmId).data.permissions.members.manage == true
+      );
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidPermCrud(m) {
+      return m is map
+        && m.keys().hasAll(['read', 'create', 'edit', 'delete'])
+        && m.keys().hasOnly(['read', 'create', 'edit', 'delete'])
+        && m.read is bool && m.create is bool && m.edit is bool && m.delete is bool;
+    }
+
+    function isValidPermissions(p) {
+      return p is map
+        && p.keys().hasAll(['batches', 'production', 'feed', 'sales', 'reports', 'settings', 'members'])
+        && p.keys().hasOnly(['batches', 'production', 'feed', 'sales', 'reports', 'settings', 'members'])
+        && isValidPermCrud(p.batches)
+        && isValidPermCrud(p.production)
+        && isValidPermCrud(p.feed)
+        && p.sales is map
+        && p.sales.keys().hasAll(['read', 'create', 'edit', 'delete', 'overridePrice'])
+        && p.sales.keys().hasOnly(['read', 'create', 'edit', 'delete', 'overridePrice'])
+        && p.sales.read is bool && p.sales.create is bool && p.sales.edit is bool && p.sales.delete is bool && p.sales.overridePrice is bool
+        && p.reports is map
+        && p.reports.keys().hasAll(['read', 'export'])
+        && p.reports.keys().hasOnly(['read', 'export'])
+        && p.reports.read is bool && p.reports.export is bool
+        && p.settings is map
+        && p.settings.keys().hasAll(['read', 'edit'])
+        && p.settings.keys().hasOnly(['read', 'edit'])
+        && p.settings.read is bool && p.settings.edit is bool
+        && p.members is map
+        && p.members.keys().hasAll(['read', 'manage'])
+        && p.members.keys().hasOnly(['read', 'manage'])
+        && p.members.read is bool && p.members.manage is bool;
+    }
+
+    function isValidUserBinding(d, uid) {
+      return d.keys().hasAll(['uid', 'email', 'displayName', 'farmId', 'role', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['uid', 'email', 'displayName', 'farmId', 'role', 'createdAt', 'updatedAt'])
+        && d.uid == uid
+        && d.uid == request.auth.uid
+        && d.email is string && d.email.size() >= 3 && d.email.size() <= 200
+        && d.displayName is string && d.displayName.size() >= 1 && d.displayName.size() <= 150
+        && isValidId(d.farmId)
+        && d.role in ['owner', 'staff']
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidPendingInvite(d, emailKey) {
+      return d.keys().hasAll(['emailKey', 'farmId', 'farmName', 'inviteId', 'emailLower', 'jobTitle', 'role', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['emailKey', 'farmId', 'farmName', 'inviteId', 'emailLower', 'jobTitle', 'role', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.emailKey == emailKey
+        && isValidId(d.farmId)
+        && d.farmName is string && d.farmName.size() >= 1 && d.farmName.size() <= 120
+        && isValidId(d.inviteId)
+        && d.emailLower is string && d.emailLower.size() >= 3 && d.emailLower.size() <= 200
+        && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
+        && d.role == 'staff'
+        && isValidPermissions(d.permissions)
+        && d.status in ['pending', 'accepted', 'revoked']
+        && isValidId(d.invitedBy)
+        && d.acceptedByUid is string && d.acceptedByUid.size() <= 128
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFarm(d, farmId) {
+      return d.keys().hasAll(['farmId', 'name', 'location', 'contactPhone', 'contactEmail', 'currency', 'timezone', 'activeSectors', 'ownerUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['farmId', 'name', 'location', 'contactPhone', 'contactEmail', 'currency', 'timezone', 'activeSectors', 'ownerUid', 'createdAt', 'updatedAt'])
+        && d.farmId == farmId
+        && d.name is string && d.name.size() >= 2 && d.name.size() <= 120
+        && d.location is string && d.location.size() <= 200
+        && d.contactPhone is string && d.contactPhone.size() <= 60
+        && d.contactEmail is string && d.contactEmail.size() <= 150
+        && d.currency is string && d.currency.size() >= 3 && d.currency.size() <= 10
+        && d.timezone is string && d.timezone.size() >= 2 && d.timezone.size() <= 64
+        && d.activeSectors is list && d.activeSectors.size() >= 1 && d.activeSectors.size() <= 10
+        && d.activeSectors[0] is string && d.activeSectors[0].size() <= 40
+        && isValidId(d.ownerUid)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFarmMember(d, farmId, memberUid) {
+      return d.keys().hasAll(['uid', 'farmId', 'email', 'displayName', 'jobTitle', 'role', 'status', 'permissions', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['uid', 'farmId', 'email', 'displayName', 'jobTitle', 'role', 'status', 'permissions', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.uid == memberUid
+        && d.farmId == farmId
+        && d.email is string && d.email.size() >= 3 && d.email.size() <= 200
+        && d.displayName is string && d.displayName.size() >= 1 && d.displayName.size() <= 150
+        && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
+        && d.role in ['owner', 'staff']
+        && d.status in ['active', 'inactive']
+        && isValidPermissions(d.permissions)
+        && isValidId(d.createdBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFarmInvite(d, farmId, inviteId) {
+      return d.keys().hasAll(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.id == inviteId
+        && d.farmId == farmId
+        && isValidId(d.emailKey)
+        && d.emailLower is string && d.emailLower.size() >= 3 && d.emailLower.size() <= 200
+        && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
+        && isValidPermissions(d.permissions)
+        && d.status in ['pending', 'accepted', 'revoked']
+        && isValidId(d.invitedBy)
+        && d.acceptedByUid is string && d.acceptedByUid.size() <= 128
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidPen(d, farmId, penId) {
+      return d.keys().hasAll(['id', 'farmId', 'name', 'code', 'capacity', 'sector', 'activeBatchId', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'name', 'code', 'capacity', 'sector', 'activeBatchId', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.id == penId
+        && d.farmId == farmId
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
+        && d.code is string && d.code.size() >= 1 && d.code.size() <= 30
+        && d.capacity is int && d.capacity >= 0 && d.capacity <= 1000000
+        && d.sector == 'poultry'
+        && d.activeBatchId is string && d.activeBatchId.size() <= 128
+        && d.notes is string && d.notes.size() <= 300
+        && d.status in ['active', 'inactive']
+        && isValidId(d.createdBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFeedItem(d, farmId, feedItemId) {
+      return d.keys().hasAll(['id', 'farmId', 'feedType', 'brand', 'defaultBagWeightKg', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'feedType', 'brand', 'defaultBagWeightKg', 'notes', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.id == feedItemId
+        && d.farmId == farmId
+        && d.feedType is string && d.feedType.size() >= 1 && d.feedType.size() <= 80
+        && d.brand is string && d.brand.size() >= 1 && d.brand.size() <= 80
+        && d.defaultBagWeightKg is number && d.defaultBagWeightKg > 0 && d.defaultBagWeightKg <= 1000
+        && d.notes is string && d.notes.size() <= 300
+        && d.status in ['active', 'inactive']
+        && isValidId(d.createdBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFeedStock(d, farmId, feedItemId) {
+      return d.keys().hasAll(['feedItemId', 'farmId', 'feedType', 'brand', 'balanceGrams', 'lastPurchaseDate', 'lastUnitCostPerGramNgn', 'updatedAt'])
+        && d.keys().hasOnly(['feedItemId', 'farmId', 'feedType', 'brand', 'balanceGrams', 'lastPurchaseDate', 'lastUnitCostPerGramNgn', 'updatedAt'])
+        && d.feedItemId == feedItemId
+        && d.farmId == farmId
+        && d.feedType is string && d.feedType.size() >= 1 && d.feedType.size() <= 80
+        && d.brand is string && d.brand.size() >= 1 && d.brand.size() <= 80
+        && d.balanceGrams is number && d.balanceGrams >= 0
+        && isValidOptionalDateStr(d.lastPurchaseDate)
+        && d.lastUnitCostPerGramNgn is number && d.lastUnitCostPerGramNgn >= 0
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidSalesUnit(d, farmId, unitId) {
+      return d.keys().hasAll(['id', 'farmId', 'name', 'eggCountPerUnit', 'currentPriceNgn', 'effectiveDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'name', 'eggCountPerUnit', 'currentPriceNgn', 'effectiveDate', 'status', 'createdBy', 'createdAt', 'updatedAt'])
+        && d.id == unitId
+        && d.farmId == farmId
+        && d.name is string && d.name.size() >= 1 && d.name.size() <= 80
+        && d.eggCountPerUnit is int && d.eggCountPerUnit >= 1 && d.eggCountPerUnit <= 10000
+        && d.currentPriceNgn is number && d.currentPriceNgn >= 0
+        && isValidDateStr(d.effectiveDate)
+        && d.status in ['active', 'inactive']
+        && isValidId(d.createdBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidBatchCodeLock(d, farmId, codeKey) {
+      return d.keys().hasAll(['codeKey', 'farmId', 'batchId', 'createdAt'])
+        && d.keys().hasOnly(['codeKey', 'farmId', 'batchId', 'createdAt'])
+        && d.codeKey == codeKey
+        && d.farmId == farmId
+        && isValidId(d.batchId)
+        && d.createdAt is timestamp;
+    }
+
+    function isValidBatch(d, farmId, batchId) {
+      return d.keys().hasAll(['id', 'farmId', 'batchCode', 'penId', 'penNameSnapshot', 'birdType', 'breed', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'batchCode', 'penId', 'penNameSnapshot', 'birdType', 'breed', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.id == batchId
+        && d.farmId == farmId
+        && d.batchCode is string && d.batchCode.size() >= 1 && d.batchCode.size() <= 60
+        && isValidId(d.penId)
+        && d.penNameSnapshot is string && d.penNameSnapshot.size() >= 1 && d.penNameSnapshot.size() <= 80
+        && d.birdType is string && d.birdType.size() >= 1 && d.birdType.size() <= 60
+        && d.breed is string && d.breed.size() <= 80
+        && d.source is string && d.source.size() <= 120
+        && isValidOptionalDateStr(d.hatchDate)
+        && d.ageAtPlacementDays is int && d.ageAtPlacementDays >= 0 && d.ageAtPlacementDays <= 2000
+        && isValidDateStr(d.placementDate)
+        && d.initialCount is int && d.initialCount >= 1 && d.initialCount <= 1000000
+        && d.maleCount is int && d.maleCount >= 0 && d.maleCount <= 1000000
+        && d.femaleCount is int && d.femaleCount >= 0 && d.femaleCount <= 1000000
+        && (d.maleCount + d.femaleCount <= d.initialCount)
+        && d.remarks is string && d.remarks.size() <= 500
+        && d.status in ['active', 'inactive']
+        && isValidId(d.createdBy)
+        && d.createdByName is string && d.createdByName.size() >= 1 && d.createdByName.size() <= 150
+        && isValidId(d.updatedBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidEggProduction(d, farmId, entryId) {
+      return d.keys().hasAll(['id', 'farmId', 'transactionDate', 'transactionTime', 'batchId', 'batchCodeSnapshot', 'penId', 'penNameSnapshot', 'birdAgeDaysAtTransaction', 'crates', 'pieces', 'intactEggs', 'crackedEggs', 'damagedEggs', 'totalEggs', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'transactionTime', 'batchId', 'batchCodeSnapshot', 'penId', 'penNameSnapshot', 'birdAgeDaysAtTransaction', 'crates', 'pieces', 'intactEggs', 'crackedEggs', 'damagedEggs', 'totalEggs', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.id == entryId
+        && d.farmId == farmId
+        && isValidDateStr(d.transactionDate)
+        && isValidTimeStr(d.transactionTime)
+        && isValidId(d.batchId)
+        && d.batchCodeSnapshot is string && d.batchCodeSnapshot.size() >= 1 && d.batchCodeSnapshot.size() <= 60
+        && isValidId(d.penId)
+        && d.penNameSnapshot is string && d.penNameSnapshot.size() >= 1 && d.penNameSnapshot.size() <= 80
+        && d.birdAgeDaysAtTransaction is int && d.birdAgeDaysAtTransaction >= 0 && d.birdAgeDaysAtTransaction <= 5000
+        && d.crates is int && d.crates >= 0 && d.crates <= 100000
+        && d.pieces is int && d.pieces >= 0 && d.pieces <= 100000
+        && d.intactEggs is int && d.intactEggs == (d.crates * 30 + d.pieces)
+        && d.crackedEggs is int && d.crackedEggs >= 0 && d.crackedEggs <= 100000
+        && d.damagedEggs is int && d.damagedEggs >= 0 && d.damagedEggs <= 100000
+        && d.totalEggs is int && d.totalEggs == (d.intactEggs + d.crackedEggs + d.damagedEggs) && d.totalEggs > 0
+        && d.remarks is string && d.remarks.size() <= 500
+        && d.isVoided is bool
+        && d.voidReason is string && d.voidReason.size() <= 300
+        && d.voidedBy is string && d.voidedBy.size() <= 128
+        && isValidId(d.createdBy)
+        && d.createdByName is string && d.createdByName.size() >= 1 && d.createdByName.size() <= 150
+        && isValidId(d.updatedBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFeedPurchase(d, farmId, purchaseId) {
+      return d.keys().hasAll(['id', 'farmId', 'transactionDate', 'feedItemId', 'feedTypeSnapshot', 'brandSnapshot', 'enteredQuantity', 'enteredUnit', 'bagWeightKgSnapshot', 'standardizedGrams', 'unitPurchasePriceNgn', 'totalCostNgn', 'unitCostPerGramNgn', 'supplier', 'reference', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'feedItemId', 'feedTypeSnapshot', 'brandSnapshot', 'enteredQuantity', 'enteredUnit', 'bagWeightKgSnapshot', 'standardizedGrams', 'unitPurchasePriceNgn', 'totalCostNgn', 'unitCostPerGramNgn', 'supplier', 'reference', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.id == purchaseId
+        && d.farmId == farmId
+        && isValidDateStr(d.transactionDate)
+        && isValidId(d.feedItemId)
+        && d.feedTypeSnapshot is string && d.feedTypeSnapshot.size() >= 1 && d.feedTypeSnapshot.size() <= 80
+        && d.brandSnapshot is string && d.brandSnapshot.size() >= 1 && d.brandSnapshot.size() <= 80
+        && d.enteredQuantity is number && d.enteredQuantity > 0
+        && d.enteredUnit in ['kg', 'bags']
+        && d.bagWeightKgSnapshot is number && d.bagWeightKgSnapshot > 0
+        && d.standardizedGrams is number && d.standardizedGrams > 0
+        && d.unitPurchasePriceNgn is number && d.unitPurchasePriceNgn >= 0
+        && d.totalCostNgn is number && d.totalCostNgn >= 0
+        && d.unitCostPerGramNgn is number && d.unitCostPerGramNgn >= 0
+        && d.supplier is string && d.supplier.size() <= 120
+        && d.reference is string && d.reference.size() <= 80
+        && d.remarks is string && d.remarks.size() <= 500
+        && d.isVoided is bool
+        && d.voidReason is string && d.voidReason.size() <= 300
+        && d.voidedBy is string && d.voidedBy.size() <= 128
+        && isValidId(d.createdBy)
+        && d.createdByName is string && d.createdByName.size() >= 1 && d.createdByName.size() <= 150
+        && isValidId(d.updatedBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidFeedConsumption(d, farmId, consumptionId) {
+      return d.keys().hasAll(['id', 'farmId', 'transactionDate', 'transactionTime', 'batchId', 'batchCodeSnapshot', 'penId', 'penNameSnapshot', 'feedItemId', 'feedTypeSnapshot', 'brandSnapshot', 'enteredQuantity', 'enteredUnit', 'bagWeightKgSnapshot', 'standardizedGrams', 'costSourcePurchaseId', 'costSourcePurchaseDate', 'unitCostPerGramNgn', 'totalCostNgn', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'transactionTime', 'batchId', 'batchCodeSnapshot', 'penId', 'penNameSnapshot', 'feedItemId', 'feedTypeSnapshot', 'brandSnapshot', 'enteredQuantity', 'enteredUnit', 'bagWeightKgSnapshot', 'standardizedGrams', 'costSourcePurchaseId', 'costSourcePurchaseDate', 'unitCostPerGramNgn', 'totalCostNgn', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.id == consumptionId
+        && d.farmId == farmId
+        && isValidDateStr(d.transactionDate)
+        && isValidTimeStr(d.transactionTime)
+        && isValidId(d.batchId)
+        && d.batchCodeSnapshot is string && d.batchCodeSnapshot.size() >= 1 && d.batchCodeSnapshot.size() <= 60
+        && isValidId(d.penId)
+        && d.penNameSnapshot is string && d.penNameSnapshot.size() >= 1 && d.penNameSnapshot.size() <= 80
+        && isValidId(d.feedItemId)
+        && d.feedTypeSnapshot is string && d.feedTypeSnapshot.size() >= 1 && d.feedTypeSnapshot.size() <= 80
+        && d.brandSnapshot is string && d.brandSnapshot.size() >= 1 && d.brandSnapshot.size() <= 80
+        && d.enteredQuantity is number && d.enteredQuantity > 0
+        && d.enteredUnit in ['kg', 'bags']
+        && d.bagWeightKgSnapshot is number && d.bagWeightKgSnapshot > 0
+        && d.standardizedGrams is number && d.standardizedGrams > 0
+        && d.costSourcePurchaseId is string && d.costSourcePurchaseId.size() <= 128
+        && isValidOptionalDateStr(d.costSourcePurchaseDate)
+        && d.unitCostPerGramNgn is number && d.unitCostPerGramNgn >= 0
+        && d.totalCostNgn is number && d.totalCostNgn >= 0
+        && d.remarks is string && d.remarks.size() <= 500
+        && d.isVoided is bool
+        && d.voidReason is string && d.voidReason.size() <= 300
+        && d.voidedBy is string && d.voidedBy.size() <= 128
+        && isValidId(d.createdBy)
+        && d.createdByName is string && d.createdByName.size() >= 1 && d.createdByName.size() <= 150
+        && isValidId(d.updatedBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidEggSale(d, farmId, saleId) {
+      return d.keys().hasAll(['id', 'farmId', 'transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'salesUnitId', 'unitNameSnapshot', 'eggsPerUnitSnapshot', 'quantity', 'totalEggsEquivalent', 'suggestedUnitPriceNgn', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'salesUnitId', 'unitNameSnapshot', 'eggsPerUnitSnapshot', 'quantity', 'totalEggsEquivalent', 'suggestedUnitPriceNgn', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.id == saleId
+        && d.farmId == farmId
+        && isValidDateStr(d.transactionDate)
+        && isValidTimeStr(d.transactionTime)
+        && d.customerName is string && d.customerName.size() <= 120
+        && d.eggCategory is string && d.eggCategory.size() >= 1 && d.eggCategory.size() <= 80
+        && isValidId(d.salesUnitId)
+        && d.unitNameSnapshot is string && d.unitNameSnapshot.size() >= 1 && d.unitNameSnapshot.size() <= 80
+        && d.eggsPerUnitSnapshot is int && d.eggsPerUnitSnapshot >= 1 && d.eggsPerUnitSnapshot <= 10000
+        && d.quantity is number && d.quantity > 0
+        && d.totalEggsEquivalent is number && d.totalEggsEquivalent > 0
+        && d.suggestedUnitPriceNgn is number && d.suggestedUnitPriceNgn >= 0
+        && d.unitPriceNgn is number && d.unitPriceNgn >= 0
+        && d.priceOverridden is bool
+        && d.overrideReason is string && d.overrideReason.size() <= 300
+        && d.totalAmountNgn is number && d.totalAmountNgn >= 0
+        && d.paymentStatus in ['paid', 'pending', 'partial']
+        && d.remarks is string && d.remarks.size() <= 500
+        && d.isVoided is bool
+        && d.voidReason is string && d.voidReason.size() <= 300
+        && d.voidedBy is string && d.voidedBy.size() <= 128
+        && isValidId(d.createdBy)
+        && d.createdByName is string && d.createdByName.size() >= 1 && d.createdByName.size() <= 150
+        && isValidId(d.updatedBy)
+        && d.createdAt is timestamp
+        && d.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(d, farmId, logId) {
+      return d.keys().hasAll(['id', 'farmId', 'entityType', 'entityId', 'action', 'summary', 'before', 'after', 'actorUid', 'actorName', 'createdAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'entityType', 'entityId', 'action', 'summary', 'before', 'after', 'actorUid', 'actorName', 'createdAt'])
+        && d.id == logId
+        && d.farmId == farmId
+        && d.entityType is string && d.entityType.size() >= 1 && d.entityType.size() <= 60
+        && isValidId(d.entityId)
+        && d.action in ['create', 'update', 'void', 'status_change', 'price_override', 'permission_change']
+        && d.summary is string && d.summary.size() >= 1 && d.summary.size() <= 300
+        && d.before is map
+        && d.after is map
+        && d.actorUid == request.auth.uid
+        && d.actorName is string && d.actorName.size() >= 1 && d.actorName.size() <= 150
+        && d.createdAt is timestamp;
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. User-to-Farm Binding (One-Farm-Per-Account Enforcement)
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
+      allow list: if false;
+      allow create: if isEmailVerified()
+        && isValidId(uid)
+        && request.auth.uid == uid
+        && isValidUserBinding(incoming(), uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (
+            incoming().role == 'owner'
+            && !exists(/databases/$(database)/documents/farms/$(incoming().farmId))
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)).data.ownerUid == uid
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == 'owner'
+          ) || (
+            incoming().role == 'staff'
+            && exists(/databases/$(database)/documents/farms/$(incoming().farmId))
+            && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
+            && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'pending'
+            && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.farmId == incoming().farmId
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == 'staff'
+          )
+        );
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Email-Keyed Pending Invitations (Zero Enumeration)
+    // -------------------------------------------------------------------------
+    match /pendingInvites/{emailKey} {
+      allow get: if isEmailVerified()
+        && isValidId(emailKey)
+        && existing().emailLower == request.auth.token.email.lower();
+      allow list: if false;
+      allow create: if isEmailVerified()
+        && isValidId(emailKey)
+        && isValidPendingInvite(incoming(), emailKey)
+        && incoming().status == 'pending'
+        && incoming().acceptedByUid == ''
+        && incoming().invitedBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && canManageMembers(incoming().farmId);
+      allow update: if isEmailVerified()
+        && isValidId(emailKey)
+        && isValidPendingInvite(incoming(), emailKey)
+        && incoming().emailKey == existing().emailKey
+        && incoming().farmId == existing().farmId
+        && incoming().emailLower == existing().emailLower
+        && incoming().invitedBy == existing().invitedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (
+            canManageMembers(existing().farmId)
+            && existing().status == 'pending'
+            && incoming().status == 'revoked'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          ) ||
+          (
+            existing().status == 'pending'
+            && existing().emailLower == request.auth.token.email.lower()
+            && incoming().status == 'accepted'
+            && incoming().acceptedByUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+            && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/farms/$(existing().farmId)/members/$(request.auth.uid))
+          )
+        );
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Farms & Tenant-Scoped Subcollections
+    // -------------------------------------------------------------------------
+    match /farms/{farmId} {
+      allow get: if isValidId(farmId) && isActiveMember(farmId);
+      allow list: if false;
+      allow create: if isEmailVerified()
+        && isValidId(farmId)
+        && isValidFarm(incoming(), farmId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && !exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId;
+      allow update: if isValidId(farmId)
+        && isValidFarm(incoming(), farmId)
+        && canEditSettings(farmId)
+        && incoming().farmId == existing().farmId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'location', 'contactPhone', 'contactEmail', 'currency', 'timezone', 'updatedAt']);
+      allow delete: if false;
+
+      // Memberships
+      match /members/{memberUid} {
+        allow get: if isValidId(farmId)
+          && isValidId(memberUid)
+          && (
+            (isEmailVerified() && request.auth.uid == memberUid && existing().farmId == farmId) ||
+            canReadMembers(farmId)
+          );
+        allow list: if isEmailVerified()
+          && existing().farmId == farmId
+          && canReadMembers(farmId);
+        allow create: if isEmailVerified()
+          && isValidId(farmId)
+          && isValidId(memberUid)
+          && isValidFarmMember(incoming(), farmId, memberUid)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            // Bootstrap First Owner atomically with new Farm
+            (
+              memberUid == request.auth.uid
+              && incoming().role == 'owner'
+              && incoming().status == 'active'
+              && incoming().createdBy == request.auth.uid
+              && !exists(/databases/$(database)/documents/farms/$(farmId))
+              && getAfter(/databases/$(database)/documents/farms/$(farmId)).data.ownerUid == request.auth.uid
+            ) ||
+            // Invited staff accepting pending invite (bound strictly to pending invite permissions)
+            (
+              memberUid == request.auth.uid
+              && incoming().role == 'staff'
+              && incoming().status == 'active'
+              && exists(/databases/$(database)/documents/farms/$(farmId))
+              && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
+              && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'pending'
+              && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.farmId == farmId
+              && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.emailLower == request.auth.token.email.lower()
+              && incoming().permissions == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.permissions
+              && incoming().jobTitle == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.jobTitle
+              && incoming().createdBy == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.invitedBy
+              && getAfter(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'accepted'
+              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId
+              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff'
+            )
+          );
+        allow update: if isValidId(farmId)
+          && isValidId(memberUid)
+          && isValidFarmMember(incoming(), farmId, memberUid)
+          && canManageMembers(farmId)
+          && memberUid != request.auth.uid
+          && existing().role == 'staff'
+          && incoming().role == 'staff'
+          && incoming().uid == existing().uid
+          && incoming().farmId == existing().farmId
+          && incoming().email == existing().email
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['jobTitle', 'status', 'permissions', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Farm Invites Log
+      match /invites/{inviteId} {
+        allow get: if isValidId(farmId) && isValidId(inviteId) && canReadMembers(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && canReadMembers(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(inviteId)
+          && isValidFarmInvite(incoming(), farmId, inviteId)
+          && canManageMembers(farmId)
+          && incoming().status == 'pending'
+          && incoming().acceptedByUid == ''
+          && incoming().invitedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(farmId)
+          && isValidId(inviteId)
+          && isValidFarmInvite(incoming(), farmId, inviteId)
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().emailKey == existing().emailKey
+          && incoming().emailLower == existing().emailLower
+          && incoming().invitedBy == existing().invitedBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (
+              canManageMembers(farmId)
+              && existing().status == 'pending'
+              && incoming().status == 'revoked'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            ) ||
+            (
+              isEmailVerified()
+              && existing().status == 'pending'
+              && existing().emailLower == request.auth.token.email.lower()
+              && incoming().status == 'accepted'
+              && incoming().acceptedByUid == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Pens / Houses
+      match /pens/{penId} {
+        allow get: if isValidId(farmId) && isValidId(penId) && isActiveMember(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && isActiveMember(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(penId)
+          && isValidPen(incoming(), farmId, penId)
+          && canEditSettings(farmId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().activeBatchId == ''
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(farmId)
+          && isValidId(penId)
+          && isValidPen(incoming(), farmId, penId)
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().sector == existing().sector
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            (
+              canEditSettings(farmId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'code', 'capacity', 'notes', 'status', 'updatedAt'])
+            ) ||
+            (
+              (hasCrudPerm(farmId, 'batches', 'create') || hasCrudPerm(farmId, 'batches', 'edit'))
+              && (incoming().activeBatchId == '' || existing().activeBatchId == '' || incoming().activeBatchId == existing().activeBatchId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['activeBatchId', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Feed Catalogue
+      match /feedItems/{feedItemId} {
+        allow get: if isValidId(farmId) && isValidId(feedItemId) && isActiveMember(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && isActiveMember(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(feedItemId)
+          && isValidFeedItem(incoming(), farmId, feedItemId)
+          && canEditSettings(farmId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(farmId)
+          && isValidId(feedItemId)
+          && isValidFeedItem(incoming(), farmId, feedItemId)
+          && canEditSettings(farmId)
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['feedType', 'brand', 'defaultBagWeightKg', 'notes', 'status', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Feed Stock (Authoritative Gram Balances)
+      match /feedStock/{feedItemId} {
+        allow get: if isValidId(farmId) && isValidId(feedItemId) && isActiveMember(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && isActiveMember(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(feedItemId)
+          && isValidFeedStock(incoming(), farmId, feedItemId)
+          && (canEditSettings(farmId) || hasCrudPerm(farmId, 'feed', 'create'))
+          && exists(/databases/$(database)/documents/farms/$(farmId)/feedItems/$(feedItemId))
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(farmId)
+          && isValidId(feedItemId)
+          && isValidFeedStock(incoming(), farmId, feedItemId)
+          && (hasCrudPerm(farmId, 'feed', 'create') || hasCrudPerm(farmId, 'feed', 'edit') || hasCrudPerm(farmId, 'feed', 'delete'))
+          && incoming().feedItemId == existing().feedItemId
+          && incoming().farmId == existing().farmId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['feedType', 'brand', 'balanceGrams', 'lastPurchaseDate', 'lastUnitCostPerGramNgn', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Sales Units & Configured Prices
+      match /salesUnits/{unitId} {
+        allow get: if isValidId(farmId) && isValidId(unitId) && isActiveMember(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && isActiveMember(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(unitId)
+          && isValidSalesUnit(incoming(), farmId, unitId)
+          && canEditSettings(farmId)
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(farmId)
+          && isValidId(unitId)
+          && isValidSalesUnit(incoming(), farmId, unitId)
+          && canEditSettings(farmId)
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'eggCountPerUnit', 'currentPriceNgn', 'effectiveDate', 'status', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Batch Code Uniqueness Locks
+      match /batchCodes/{codeKey} {
+        allow get: if isValidId(farmId) && isValidId(codeKey) && hasCrudPerm(farmId, 'batches', 'read');
+        allow list: if false;
+        allow create: if isValidId(farmId)
+          && isValidId(codeKey)
+          && isValidBatchCodeLock(incoming(), farmId, codeKey)
+          && hasCrudPerm(farmId, 'batches', 'create')
+          && incoming().createdAt == request.time
+          && existsAfter(/databases/$(database)/documents/farms/$(farmId)/batches/$(incoming().batchId));
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // Poultry Batches
+      match /batches/{batchId} {
+        allow get: if isValidId(farmId) && isValidId(batchId) && isActiveMember(farmId);
+        allow list: if isEmailVerified() && existing().farmId == farmId && isActiveMember(farmId);
+        allow create: if isValidId(farmId)
+          && isValidId(batchId)
+          && isValidBatch(incoming(), farmId, batchId)
+          && hasCrudPerm(farmId, 'batches', 'create')
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/farms/$(farmId)/pens/$(incoming().penId));
+        allow update: if isValidId(farmId)
+          && isValidId(batchId)
+          && isValidBatch(incoming(), farmId, batchId)
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().batchCode == existing().batchCode
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByName == existing().createdByName
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasCrudPerm(farmId, 'batches', 'edit')
+              && incoming().diff(existing()).affectedKeys().hasOnly(['penId', 'penNameSnapshot', 'birdType', 'breed', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              hasCrudPerm(farmId, 'batches', 'delete')
+              && incoming().status == 'inactive'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Egg Production Entries
+      match /eggProduction/{entryId} {
+        allow get: if isValidId(farmId) && isValidId(entryId) && (hasCrudPerm(farmId, 'production', 'read') || canReadReports(farmId));
+        allow list: if isEmailVerified() && existing().farmId == farmId && (hasCrudPerm(farmId, 'production', 'read') || canReadReports(farmId));
+        allow create: if isValidId(farmId)
+          && isValidId(entryId)
+          && isValidEggProduction(incoming(), farmId, entryId)
+          && hasCrudPerm(farmId, 'production', 'create')
+          && incoming().isVoided == false
+          && incoming().voidReason == ''
+          && incoming().voidedBy == ''
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/farms/$(farmId)/batches/$(incoming().batchId))
+          && get(/databases/$(database)/documents/farms/$(farmId)/batches/$(incoming().batchId)).data.status == 'active';
+        allow update: if isValidId(farmId)
+          && isValidId(entryId)
+          && isValidEggProduction(incoming(), farmId, entryId)
+          && existing().isVoided == false
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByName == existing().createdByName
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasCrudPerm(farmId, 'production', 'edit')
+              && incoming().isVoided == false
+              && incoming().diff(existing()).affectedKeys().hasOnly(['transactionDate', 'transactionTime', 'batchId', 'batchCodeSnapshot', 'penId', 'penNameSnapshot', 'birdAgeDaysAtTransaction', 'crates', 'pieces', 'intactEggs', 'crackedEggs', 'damagedEggs', 'totalEggs', 'remarks', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              hasCrudPerm(farmId, 'production', 'delete')
+              && incoming().isVoided == true
+              && incoming().voidReason.size() >= 1
+              && incoming().voidedBy == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Feed Purchases (Stock-In)
+      match /feedPurchases/{purchaseId} {
+        allow get: if isValidId(farmId) && isValidId(purchaseId) && (hasCrudPerm(farmId, 'feed', 'read') || canReadReports(farmId));
+        allow list: if isEmailVerified() && existing().farmId == farmId && (hasCrudPerm(farmId, 'feed', 'read') || canReadReports(farmId));
+        allow create: if isValidId(farmId)
+          && isValidId(purchaseId)
+          && isValidFeedPurchase(incoming(), farmId, purchaseId)
+          && hasCrudPerm(farmId, 'feed', 'create')
+          && incoming().isVoided == false
+          && incoming().voidReason == ''
+          && incoming().voidedBy == ''
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/farms/$(farmId)/feedItems/$(incoming().feedItemId));
+        allow update: if isValidId(farmId)
+          && isValidId(purchaseId)
+          && isValidFeedPurchase(incoming(), farmId, purchaseId)
+          && existing().isVoided == false
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByName == existing().createdByName
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasCrudPerm(farmId, 'feed', 'edit')
+              && incoming().isVoided == false
+              && incoming().diff(existing()).affectedKeys().hasOnly(['supplier', 'reference', 'remarks', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              hasCrudPerm(farmId, 'feed', 'delete')
+              && incoming().isVoided == true
+              && incoming().voidReason.size() >= 1
+              && incoming().voidedBy == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Feed Consumption (Stock-Out + Historical Cost Snapshots)
+      match /feedConsumption/{consumptionId} {
+        allow get: if isValidId(farmId) && isValidId(consumptionId) && (hasCrudPerm(farmId, 'feed', 'read') || canReadReports(farmId));
+        allow list: if isEmailVerified() && existing().farmId == farmId && (hasCrudPerm(farmId, 'feed', 'read') || canReadReports(farmId));
+        allow create: if isValidId(farmId)
+          && isValidId(consumptionId)
+          && isValidFeedConsumption(incoming(), farmId, consumptionId)
+          && hasCrudPerm(farmId, 'feed', 'create')
+          && incoming().isVoided == false
+          && incoming().voidReason == ''
+          && incoming().voidedBy == ''
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/farms/$(farmId)/batches/$(incoming().batchId))
+          && get(/databases/$(database)/documents/farms/$(farmId)/batches/$(incoming().batchId)).data.status == 'active'
+          && exists(/databases/$(database)/documents/farms/$(farmId)/feedItems/$(incoming().feedItemId));
+        allow update: if isValidId(farmId)
+          && isValidId(consumptionId)
+          && isValidFeedConsumption(incoming(), farmId, consumptionId)
+          && existing().isVoided == false
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByName == existing().createdByName
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasCrudPerm(farmId, 'feed', 'edit')
+              && incoming().isVoided == false
+              && incoming().diff(existing()).affectedKeys().hasOnly(['transactionDate', 'transactionTime', 'remarks', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              hasCrudPerm(farmId, 'feed', 'delete')
+              && incoming().isVoided == true
+              && incoming().voidReason.size() >= 1
+              && incoming().voidedBy == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Egg Sales (Price Snapshots & Override Protection)
+      match /eggSales/{saleId} {
+        allow get: if isValidId(farmId) && isValidId(saleId) && (hasCrudPerm(farmId, 'sales', 'read') || canReadReports(farmId));
+        allow list: if isEmailVerified() && existing().farmId == farmId && (hasCrudPerm(farmId, 'sales', 'read') || canReadReports(farmId));
+        allow create: if isValidId(farmId)
+          && isValidId(saleId)
+          && isValidEggSale(incoming(), farmId, saleId)
+          && hasCrudPerm(farmId, 'sales', 'create')
+          && incoming().isVoided == false
+          && incoming().voidReason == ''
+          && incoming().voidedBy == ''
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/farms/$(farmId)/salesUnits/$(incoming().salesUnitId))
+          && (
+            (
+              incoming().priceOverridden == false
+              && incoming().unitPriceNgn == incoming().suggestedUnitPriceNgn
+            ) ||
+            (
+              incoming().priceOverridden == true
+              && canOverrideSalesPrice(farmId)
+            )
+          );
+        allow update: if isValidId(farmId)
+          && isValidId(saleId)
+          && isValidEggSale(incoming(), farmId, saleId)
+          && existing().isVoided == false
+          && incoming().id == existing().id
+          && incoming().farmId == existing().farmId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByName == existing().createdByName
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasCrudPerm(farmId, 'sales', 'edit')
+              && incoming().isVoided == false
+              && (
+                (incoming().unitPriceNgn == existing().unitPriceNgn && incoming().priceOverridden == existing().priceOverridden) ||
+                canOverrideSalesPrice(farmId)
+              )
+              && incoming().diff(existing()).affectedKeys().hasOnly(['transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'quantity', 'totalEggsEquivalent', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'remarks', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              hasCrudPerm(farmId, 'sales', 'delete')
+              && incoming().isVoided == true
+              && incoming().voidReason.size() >= 1
+              && incoming().voidedBy == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Immutable Audit Logs
+      match /auditLogs/{logId} {
+        allow get: if isValidId(farmId) && isValidId(logId) && (isFarmOwner(farmId) || canReadReports(farmId));
+        allow list: if isEmailVerified() && existing().farmId == farmId && (isFarmOwner(farmId) || canReadReports(farmId));
+        allow create: if isValidId(farmId)
+          && isValidId(logId)
+          && isActiveMember(farmId)
+          && isValidAuditLog(incoming(), farmId, logId)
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if false;
+      }
+    }
+  }
+}

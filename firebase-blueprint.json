@@ -1,0 +1,571 @@
+{
+  "entities": {
+    "UserFarmBinding": {
+      "title": "UserFarmBinding",
+      "description": "Enforces one-farm-per-account binding for an authenticated user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["owner", "staff"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "farmId", "role", "createdAt", "updatedAt"]
+    },
+    "PendingInvite": {
+      "title": "PendingInvite",
+      "description": "Email-keyed staff invitation allowing an invited verified user to claim membership in one farm.",
+      "type": "object",
+      "properties": {
+        "emailKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "inviteId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "emailLower": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "jobTitle": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "role": { "type": "string", "enum": ["staff"] },
+        "permissions": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "acceptedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "emailKey",
+        "farmId",
+        "farmName",
+        "inviteId",
+        "emailLower",
+        "jobTitle",
+        "role",
+        "permissions",
+        "status",
+        "invitedBy",
+        "acceptedByUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Farm": {
+      "title": "Farm",
+      "description": "Top-level tenant profile and regional settings for Babagiwa Farm.",
+      "type": "object",
+      "properties": {
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "location": { "type": "string", "maxLength": 200 },
+        "contactPhone": { "type": "string", "maxLength": 60 },
+        "contactEmail": { "type": "string", "maxLength": 150 },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 10 },
+        "timezone": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "activeSectors": { "type": "array" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["farmId", "name", "location", "contactPhone", "contactEmail", "currency", "timezone", "activeSectors", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "FarmMember": {
+      "title": "FarmMember",
+      "description": "Farm membership record storing role, active status, descriptive jobTitle, and granular permissions.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "jobTitle": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "role": { "type": "string", "enum": ["owner", "staff"] },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "permissions": { "type": "object" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "farmId", "email", "displayName", "jobTitle", "role", "status", "permissions", "createdBy", "createdAt", "updatedAt"]
+    },
+    "FarmInvite": {
+      "title": "FarmInvite",
+      "description": "Farm-scoped log of staff invitations issued by the farm owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "emailKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "emailLower": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "jobTitle": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "permissions": { "type": "object" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "acceptedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "farmId", "emailKey", "emailLower", "jobTitle", "permissions", "status", "invitedBy", "acceptedByUid", "createdAt", "updatedAt"]
+    },
+    "Pen": {
+      "title": "Pen",
+      "description": "Configurable poultry house or pen with optional active batch occupancy lock.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "code": { "type": "string", "minLength": 1, "maxLength": 30 },
+        "capacity": { "type": "integer" },
+        "sector": { "type": "string", "enum": ["poultry"] },
+        "activeBatchId": { "type": "string", "maxLength": 128 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "farmId", "name", "code", "capacity", "sector", "activeBatchId", "notes", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "FeedItem": {
+      "title": "FeedItem",
+      "description": "Configurable poultry feed type and brand with bag weight default in kg.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "feedType": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "brand": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "defaultBagWeightKg": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "farmId", "feedType", "brand", "defaultBagWeightKg", "notes", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "FeedStock": {
+      "title": "FeedStock",
+      "description": "Transactional feed inventory balance stored authoritatively in grams.",
+      "type": "object",
+      "properties": {
+        "feedItemId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "feedType": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "brand": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "balanceGrams": { "type": "number" },
+        "lastPurchaseDate": { "type": "string", "maxLength": 10 },
+        "lastUnitCostPerGramNgn": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["feedItemId", "farmId", "feedType", "brand", "balanceGrams", "lastPurchaseDate", "lastUnitCostPerGramNgn", "updatedAt"]
+    },
+    "SalesUnit": {
+      "title": "SalesUnit",
+      "description": "Configurable egg selling unit and effective suggested unit price in NGN.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "eggCountPerUnit": { "type": "integer" },
+        "currentPriceNgn": { "type": "number" },
+        "effectiveDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "farmId", "name", "eggCountPerUnit", "currentPriceNgn", "effectiveDate", "status", "createdBy", "createdAt", "updatedAt"]
+    },
+    "BatchCodeLock": {
+      "title": "BatchCodeLock",
+      "description": "Uniqueness lock ensuring batchCode is unique within a farm.",
+      "type": "object",
+      "properties": {
+        "codeKey": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["codeKey", "farmId", "batchId", "createdAt"]
+    },
+    "PoultryBatch": {
+      "title": "PoultryBatch",
+      "description": "Flock batch placed in a pen with placement/hatch age source fields.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCode": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birdType": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "breed": { "type": "string", "maxLength": 80 },
+        "source": { "type": "string", "maxLength": 120 },
+        "hatchDate": { "type": "string", "maxLength": 10 },
+        "ageAtPlacementDays": { "type": "integer" },
+        "placementDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "initialCount": { "type": "integer" },
+        "maleCount": { "type": "integer" },
+        "femaleCount": { "type": "integer" },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "batchCode",
+        "penId",
+        "penNameSnapshot",
+        "birdType",
+        "breed",
+        "source",
+        "hatchDate",
+        "ageAtPlacementDays",
+        "placementDate",
+        "initialCount",
+        "maleCount",
+        "femaleCount",
+        "remarks",
+        "status",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EggProductionEntry": {
+      "title": "EggProductionEntry",
+      "description": "Independent egg production entry supporting multiple records per batch/date with age snapshot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "transactionTime": { "type": "string", "maxLength": 5 },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birdAgeDaysAtTransaction": { "type": "integer" },
+        "crates": { "type": "integer" },
+        "pieces": { "type": "integer" },
+        "intactEggs": { "type": "integer" },
+        "crackedEggs": { "type": "integer" },
+        "damagedEggs": { "type": "integer" },
+        "totalEggs": { "type": "integer" },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "transactionDate",
+        "transactionTime",
+        "batchId",
+        "batchCodeSnapshot",
+        "penId",
+        "penNameSnapshot",
+        "birdAgeDaysAtTransaction",
+        "crates",
+        "pieces",
+        "intactEggs",
+        "crackedEggs",
+        "damagedEggs",
+        "totalEggs",
+        "remarks",
+        "isVoided",
+        "voidReason",
+        "voidedBy",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeedPurchase": {
+      "title": "FeedPurchase",
+      "description": "Feed purchase stock-in transaction with authoritative grams and unit cost per gram.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "feedItemId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "feedTypeSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "brandSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "enteredQuantity": { "type": "number" },
+        "enteredUnit": { "type": "string", "enum": ["kg", "bags"] },
+        "bagWeightKgSnapshot": { "type": "number" },
+        "standardizedGrams": { "type": "number" },
+        "unitPurchasePriceNgn": { "type": "number" },
+        "totalCostNgn": { "type": "number" },
+        "unitCostPerGramNgn": { "type": "number" },
+        "supplier": { "type": "string", "maxLength": 120 },
+        "reference": { "type": "string", "maxLength": 80 },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "transactionDate",
+        "feedItemId",
+        "feedTypeSnapshot",
+        "brandSnapshot",
+        "enteredQuantity",
+        "enteredUnit",
+        "bagWeightKgSnapshot",
+        "standardizedGrams",
+        "unitPurchasePriceNgn",
+        "totalCostNgn",
+        "unitCostPerGramNgn",
+        "supplier",
+        "reference",
+        "remarks",
+        "isVoided",
+        "voidReason",
+        "voidedBy",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FeedConsumption": {
+      "title": "FeedConsumption",
+      "description": "Feed consumption stock-out transaction with historical cost snapshot.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "transactionTime": { "type": "string", "maxLength": 5 },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "feedItemId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "feedTypeSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "brandSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "enteredQuantity": { "type": "number" },
+        "enteredUnit": { "type": "string", "enum": ["kg", "bags"] },
+        "bagWeightKgSnapshot": { "type": "number" },
+        "standardizedGrams": { "type": "number" },
+        "costSourcePurchaseId": { "type": "string", "maxLength": 128 },
+        "costSourcePurchaseDate": { "type": "string", "maxLength": 10 },
+        "unitCostPerGramNgn": { "type": "number" },
+        "totalCostNgn": { "type": "number" },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "transactionDate",
+        "transactionTime",
+        "batchId",
+        "batchCodeSnapshot",
+        "penId",
+        "penNameSnapshot",
+        "feedItemId",
+        "feedTypeSnapshot",
+        "brandSnapshot",
+        "enteredQuantity",
+        "enteredUnit",
+        "bagWeightKgSnapshot",
+        "standardizedGrams",
+        "costSourcePurchaseId",
+        "costSourcePurchaseDate",
+        "unitCostPerGramNgn",
+        "totalCostNgn",
+        "remarks",
+        "isVoided",
+        "voidReason",
+        "voidedBy",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "EggSale": {
+      "title": "EggSale",
+      "description": "Egg sales transaction with selling unit and price snapshots.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "transactionTime": { "type": "string", "maxLength": 5 },
+        "customerName": { "type": "string", "maxLength": 120 },
+        "eggCategory": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "salesUnitId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "unitNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "eggsPerUnitSnapshot": { "type": "integer" },
+        "quantity": { "type": "number" },
+        "totalEggsEquivalent": { "type": "number" },
+        "suggestedUnitPriceNgn": { "type": "number" },
+        "unitPriceNgn": { "type": "number" },
+        "priceOverridden": { "type": "boolean" },
+        "overrideReason": { "type": "string", "maxLength": 300 },
+        "totalAmountNgn": { "type": "number" },
+        "paymentStatus": { "type": "string", "enum": ["paid", "pending", "partial"] },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "transactionDate",
+        "transactionTime",
+        "customerName",
+        "eggCategory",
+        "salesUnitId",
+        "unitNameSnapshot",
+        "eggsPerUnitSnapshot",
+        "quantity",
+        "totalEggsEquivalent",
+        "suggestedUnitPriceNgn",
+        "unitPriceNgn",
+        "priceOverridden",
+        "overrideReason",
+        "totalAmountNgn",
+        "paymentStatus",
+        "remarks",
+        "isVoided",
+        "voidReason",
+        "voidedBy",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable append-only audit event recording before/after changes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "entityType": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "action": { "type": "string", "enum": ["create", "update", "void", "status_change", "price_override", "permission_change"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "before": { "type": "object" },
+        "after": { "type": "object" },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "farmId", "entityType", "entityId", "action", "summary", "before", "after", "actorUid", "actorName", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserFarmBinding" },
+      "description": "Private user-to-farm binding enforcing one-farm-per-account."
+    },
+    "/pendingInvites/{emailKey}": {
+      "schema": { "$ref": "#/entities/PendingInvite" },
+      "description": "Email-keyed staff invitations readable only by the matching verified email."
+    },
+    "/farms/{farmId}": {
+      "schema": { "$ref": "#/entities/Farm" },
+      "description": "Farm profile and configuration root."
+    },
+    "/farms/{farmId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/FarmMember" },
+      "description": "Tenant-scoped member roles and granular permissions."
+    },
+    "/farms/{farmId}/invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/FarmInvite" },
+      "description": "Owner-managed staff invitation records."
+    },
+    "/farms/{farmId}/pens/{penId}": {
+      "schema": { "$ref": "#/entities/Pen" },
+      "description": "Poultry houses/pens."
+    },
+    "/farms/{farmId}/feedItems/{feedItemId}": {
+      "schema": { "$ref": "#/entities/FeedItem" },
+      "description": "Feed catalogue items."
+    },
+    "/farms/{farmId}/feedStock/{feedItemId}": {
+      "schema": { "$ref": "#/entities/FeedStock" },
+      "description": "Current feed stock balances in grams."
+    },
+    "/farms/{farmId}/salesUnits/{unitId}": {
+      "schema": { "$ref": "#/entities/SalesUnit" },
+      "description": "Egg selling units and suggested unit prices."
+    },
+    "/farms/{farmId}/batchCodes/{codeKey}": {
+      "schema": { "$ref": "#/entities/BatchCodeLock" },
+      "description": "Uniqueness lock for farm batch codes."
+    },
+    "/farms/{farmId}/batches/{batchId}": {
+      "schema": { "$ref": "#/entities/PoultryBatch" },
+      "description": "Poultry batches/flocks."
+    },
+    "/farms/{farmId}/eggProduction/{entryId}": {
+      "schema": { "$ref": "#/entities/EggProductionEntry" },
+      "description": "Daily egg production entries."
+    },
+    "/farms/{farmId}/feedPurchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/FeedPurchase" },
+      "description": "Feed purchase stock-in records."
+    },
+    "/farms/{farmId}/feedConsumption/{consumptionId}": {
+      "schema": { "$ref": "#/entities/FeedConsumption" },
+      "description": "Feed consumption stock-out records with cost snapshots."
+    },
+    "/farms/{farmId}/eggSales/{saleId}": {
+      "schema": { "$ref": "#/entities/EggSale" },
+      "description": "Egg sales records with price snapshots."
+    },
+    "/farms/{farmId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable operational audit trail."
+    }
+  }
+}
