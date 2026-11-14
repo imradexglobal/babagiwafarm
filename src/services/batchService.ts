@@ -18,6 +18,7 @@ export async function createBatch(params: {
   penId: string;
   birdType: string;
   breed: string;
+  strain?: string;
   source: string;
   hatchDate: string;
   ageAtPlacementDays: number;
@@ -94,6 +95,7 @@ export async function createBatch(params: {
         penNameSnapshot: pen.name.slice(0, 80),
         birdType: (params.birdType.trim() || 'Layer').slice(0, 60),
         breed: params.breed.trim().slice(0, 80),
+        strain: (params.strain || '').trim().slice(0, 80),
         source: params.source.trim().slice(0, 120),
         hatchDate: params.hatchDate.trim(),
         ageAtPlacementDays: params.hatchDate ? 0 : params.ageAtPlacementDays,
@@ -137,6 +139,7 @@ export async function updateBatch(params: {
   penId: string;
   birdType: string;
   breed: string;
+  strain?: string;
   source: string;
   hatchDate: string;
   ageAtPlacementDays: number;
@@ -201,6 +204,7 @@ export async function updateBatch(params: {
         penNameSnapshot: targetPen.name.slice(0, 80),
         birdType: (params.birdType.trim() || 'Layer').slice(0, 60),
         breed: params.breed.trim().slice(0, 80),
+        strain: (params.strain || '').trim().slice(0, 80),
         source: params.source.trim().slice(0, 120),
         hatchDate: params.hatchDate.trim(),
         ageAtPlacementDays: params.hatchDate ? 0 : params.ageAtPlacementDays,

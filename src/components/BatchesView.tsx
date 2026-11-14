@@ -1,22 +1,81 @@
 import React, { useMemo, useState } from 'react';
-import { Edit2, Plus, PowerOff, Search, X } from 'lucide-react';
+import { Calendar, Edit2, HeartPulse, Plus, PowerOff, RotateCcw, Search, X } from 'lucide-react';
 import {
+  calculateBatchFinancialSummaries,
+  calculateBatchMortalityStats,
   calculateBirdAgeDays,
   formatBirdAge,
   formatDateInTimezone,
+  formatIsoDateDisplay,
+  formatNgn,
+  generateAutoBatchCode,
   hasPermission,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
 import { createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
 import type {
   EggProductionEntry,
+  EggSale,
   Farm,
   FarmMember,
+  FarmPurchase,
   FeedConsumption,
+  MortalityEntry,
   Pen,
   PoultryBatch,
 } from '../types/farm.ts';
 import { ConfirmVoidModal } from './ConfirmVoidModal.tsx';
+
+const BIRD_TYPE_OPTIONS = [
+  'Layer',
+  'Pullet',
+  'Point of Lay',
+  'Day-Old Chick',
+  'Broiler',
+  'Cockerel',
+  'Noiler',
+  'Parent Stock / Breeder',
+] as const;
+
+const BREED_OPTIONS = [
+  'ISA Brown',
+  'Lohmann Brown',
+  'Lohmann White',
+  'Hy-Line Brown',
+  'Hy-Line W-36',
+  'Bovans Brown',
+  'Bovans Black',
+  'Harco Black',
+  'Shaver Brown',
+  'Novogen Brown',
+  'Dominant Black',
+  'Cobb 500',
+  'Ross 308',
+  'Arbor Acres',
+  'Marshal',
+  'Noiler',
+  'Kuroiler',
+] as const;
+
+const STRAIN_OPTIONS = [
+  'ISA Brown',
+  'Lohmann Brown Classic',
+  'Lohmann Brown Lite',
+  'Lohmann LSL-Lite',
+  'Hy-Line Brown',
+  'Hy-Line W-36',
+  'Hy-Line W-80',
+  'Bovans Brown',
+  'Bovans Nera',
+  'Novogen Brown',
+  'Shaver Brown',
+  'Harco Black',
+  'Dominant CZ',
+  'Cobb 500',
+  'Ross 308',
+  'Arbor Acres Plus',
+  'Standard Commercial',
+] as const;
 
 interface BatchesViewProps {
   farm: Farm;
@@ -25,6 +84,10 @@ interface BatchesViewProps {
   batches: PoultryBatch[];
   production: EggProductionEntry[];
   consumptions: FeedConsumption[];
+  sales: EggSale[];
+  farmPurchases: FarmPurchase[];
+  mortalityEntries: MortalityEntry[];
+  onOpenMortality: (batchId?: string, openModal?: boolean) => void;
 }
 
 export const BatchesView: React.FC<BatchesViewProps> = ({
@@ -34,11 +97,17 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   batches,
   production,
   consumptions,
+  sales,
+  farmPurchases,
+  mortalityEntries,
+  onOpenMortality,
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
   const canCreate = hasPermission(member, 'batches', 'create');
   const canEdit = hasPermission(member, 'batches', 'edit');
   const canDelete = hasPermission(member, 'batches', 'delete');
+  const canLogMortality =
+    hasPermission(member, 'batches', 'create') || hasPermission(member, 'production', 'create');
 
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,9 +118,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
 
   // Form fields
   const [batchCode, setBatchCode] = useState('');
+  const [batchCodeManual, setBatchCodeManual] = useState(false);
   const [penId, setPenId] = useState('');
-  const [birdType, setBirdType] = useState('Layer');
-  const [breed, setBreed] = useState('ISA Brown');
+  const [birdTypeChoice, setBirdTypeChoice] = useState<string>('Layer');
+  const [customBirdType, setCustomBirdType] = useState('');
+  const [breedChoice, setBreedChoice] = useState<string>('ISA Brown');
+  const [customBreed, setCustomBreed] = useState('');
+  const [strainChoice, setStrainChoice] = useState<string>('ISA Brown');
+  const [customStrain, setCustomStrain] = useState('');
   const [source, setSource] = useState('');
   const [ageMode, setAgeMode] = useState<'hatch' | 'placement'>('hatch');
   const [hatchDate, setHatchDate] = useState('');
@@ -65,6 +139,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const existingBatchCodes = useMemo(() => batches.map((b) => b.batchCode), [batches]);
+
+  const computeAutoBatchCode = (targetPenId: string, targetDate: string) => {
+    const targetPen = pens.find((p) => p.id === targetPenId);
+    if (!targetPen || !targetDate) return '';
+    return generateAutoBatchCode(targetPen.code || targetPen.name, targetDate, existingBatchCodes);
+  };
+
   const filteredBatches = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return batches.filter((b) => {
@@ -73,18 +155,28 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
       return (
         b.batchCode.toLowerCase().includes(q) ||
         b.penNameSnapshot.toLowerCase().includes(q) ||
-        b.breed.toLowerCase().includes(q)
+        b.breed.toLowerCase().includes(q) ||
+        (b.strain || '').toLowerCase().includes(q)
       );
     });
   }, [batches, statusFilter, searchQuery]);
 
   const openCreateModal = () => {
     const freePen = pens.find((p) => p.status === 'active' && !p.activeBatchId);
+    const initialPenId = freePen?.id || '';
+    const autoCode = freePen
+      ? generateAutoBatchCode(freePen.code || freePen.name, todayStr, existingBatchCodes)
+      : '';
     setEditingBatch(null);
-    setBatchCode('');
-    setPenId(freePen?.id || '');
-    setBirdType('Layer');
-    setBreed('ISA Brown');
+    setBatchCode(autoCode);
+    setBatchCodeManual(false);
+    setPenId(initialPenId);
+    setBirdTypeChoice('Layer');
+    setCustomBirdType('');
+    setBreedChoice('ISA Brown');
+    setCustomBreed('');
+    setStrainChoice('ISA Brown');
+    setCustomStrain('');
     setSource('');
     setAgeMode('hatch');
     setHatchDate('');
@@ -100,11 +192,21 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   };
 
   const openEditModal = (b: PoultryBatch) => {
+    const isStdBirdType = (BIRD_TYPE_OPTIONS as readonly string[]).includes(b.birdType);
+    const isStdBreed = b.breed === '' || (BREED_OPTIONS as readonly string[]).includes(b.breed);
+    const strainVal = b.strain || '';
+    const isStdStrain = strainVal === '' || (STRAIN_OPTIONS as readonly string[]).includes(strainVal);
+
     setEditingBatch(b);
     setBatchCode(b.batchCode);
+    setBatchCodeManual(true);
     setPenId(b.penId);
-    setBirdType(b.birdType);
-    setBreed(b.breed);
+    setBirdTypeChoice(isStdBirdType ? b.birdType : 'Others');
+    setCustomBirdType(isStdBirdType ? '' : b.birdType);
+    setBreedChoice(isStdBreed ? b.breed : 'Others');
+    setCustomBreed(isStdBreed ? '' : b.breed);
+    setStrainChoice(isStdStrain ? strainVal : 'Others');
+    setCustomStrain(isStdStrain ? '' : strainVal);
     setSource(b.source);
     setAgeMode(b.hatchDate ? 'hatch' : 'placement');
     setHatchDate(b.hatchDate);
@@ -119,11 +221,46 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
     setModalOpen(true);
   };
 
+  const handlePenChange = (nextPenId: string) => {
+    setPenId(nextPenId);
+    if (!editingBatch && !batchCodeManual) {
+      setBatchCode(computeAutoBatchCode(nextPenId, placementDate));
+    }
+  };
+
+  const handlePlacementDateChange = (nextDate: string) => {
+    setPlacementDate(nextDate);
+    if (!editingBatch && !batchCodeManual) {
+      setBatchCode(computeAutoBatchCode(penId, nextDate));
+    }
+  };
+
+  const handleResetAutoBatchCode = () => {
+    setBatchCodeManual(false);
+    setBatchCode(computeAutoBatchCode(penId, placementDate));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     setSubmitting(true);
     try {
+      const resolvedBirdType = (
+        birdTypeChoice === 'Others' ? customBirdType : birdTypeChoice
+      ).trim();
+      const resolvedBreed = (breedChoice === 'Others' ? customBreed : breedChoice).trim();
+      const resolvedStrain = (strainChoice === 'Others' ? customStrain : strainChoice).trim();
+
+      if (!resolvedBirdType) {
+        throw new Error('Please specify the bird type.');
+      }
+      if (breedChoice === 'Others' && !resolvedBreed) {
+        throw new Error('Please specify the custom breed.');
+      }
+      if (strainChoice === 'Others' && !resolvedStrain) {
+        throw new Error('Please specify the custom strain.');
+      }
+
       const initNum = parseInt(initialCount, 10);
       const maleNum = parseInt(maleCount || '0', 10);
       const femaleNum = femaleCount === '' ? initNum - maleNum : parseInt(femaleCount, 10);
@@ -138,8 +275,9 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
           farmId: farm.farmId,
           batch: editingBatch,
           penId,
-          birdType,
-          breed,
+          birdType: resolvedBirdType,
+          breed: resolvedBreed,
+          strain: resolvedStrain,
           source,
           hatchDate: ageMode === 'hatch' ? hatchDate : '',
           ageAtPlacementDays: ageDays,
@@ -158,8 +296,9 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
           farmId: farm.farmId,
           batchCode,
           penId,
-          birdType,
-          breed,
+          birdType: resolvedBirdType,
+          breed: resolvedBreed,
+          strain: resolvedStrain,
           source,
           hatchDate: ageMode === 'hatch' ? hatchDate : '',
           ageAtPlacementDays: ageDays,
@@ -198,6 +337,43 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
     return map;
   }, [production, consumptions]);
 
+  const mortalityStatsMap = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof calculateBatchMortalityStats>>();
+    for (const b of batches) {
+      map.set(b.id, calculateBatchMortalityStats(b, mortalityEntries));
+    }
+    return map;
+  }, [batches, mortalityEntries]);
+
+  const financialsMap = useMemo(
+    () =>
+      calculateBatchFinancialSummaries({
+        batches,
+        production,
+        consumptions,
+        sales,
+        farmPurchases,
+      }),
+    [batches, production, consumptions, sales, farmPurchases]
+  );
+
+  const filteredFinancialTotals = useMemo(() => {
+    let revenue = 0;
+    let feedExpense = 0;
+    let otherDirectExpense = 0;
+    let netProfit = 0;
+    for (const b of filteredBatches) {
+      const f = financialsMap.get(b.id);
+      if (!f) continue;
+      revenue += f.totalRevenueNgn;
+      feedExpense += f.feedExpenseNgn;
+      otherDirectExpense += f.directOtherExpenseNgn;
+      netProfit += f.netProfitNgn;
+    }
+    const marginPct = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
+    return { revenue, feedExpense, otherDirectExpense, netProfit, marginPct };
+  }, [filteredBatches, financialsMap]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -208,17 +384,28 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
           </p>
         </div>
 
-        {canCreate && (
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={openCreateModal}
-            disabled={pens.filter((p) => p.status === 'active').length === 0}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-50 whitespace-nowrap shrink-0"
+            onClick={() => onOpenMortality()}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 whitespace-nowrap shrink-0"
           >
-            <Plus className="h-4 w-4" />
-            <span>Place New Batch</span>
+            <HeartPulse className="h-4 w-4 text-emerald-800" />
+            <span>Mortality &amp; Survival</span>
           </button>
-        )}
+
+          {canCreate && (
+            <button
+              type="button"
+              onClick={openCreateModal}
+              disabled={pens.filter((p) => p.status === 'active').length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-50 whitespace-nowrap shrink-0"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Place New Batch</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {feedback && (
@@ -271,6 +458,48 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
         </div>
       </div>
 
+      {/* Batch Financials Summary Strip */}
+      {filteredBatches.length > 0 && (
+        <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 tabular-nums">
+            <div>
+              <p className="text-xs text-slate-500">Egg Sales Revenue (Filtered)</p>
+              <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(filteredFinancialTotals.revenue)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Feed Consumption Cost</p>
+              <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(filteredFinancialTotals.feedExpense)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Direct Batch Purchases</p>
+              <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(filteredFinancialTotals.otherDirectExpense)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Real-Time Net Profitability</p>
+              <p
+                className={`mt-0.5 font-mono text-lg font-bold ${
+                  filteredFinancialTotals.netProfit >= 0 ? 'text-emerald-800' : 'text-red-700'
+                }`}
+              >
+                {formatNgn(filteredFinancialTotals.netProfit)}{' '}
+                <span className="text-xs font-semibold">
+                  ({filteredFinancialTotals.marginPct.toFixed(1)}%)
+                </span>
+              </p>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            Revenue combines direct batch-tagged egg sales plus pooled farm sales allocated by each batch&apos;s share of eggs produced. Expenses include locked feed consumption costs and batch-attributed purchases.
+          </p>
+        </div>
+      )}
+
       {/* Batches Table */}
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
         {filteredBatches.length === 0 ? (
@@ -287,11 +516,15 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
                   <th className="px-4 py-3 font-medium">Batch Code</th>
                   <th className="px-4 py-3 font-medium">Pen</th>
-                  <th className="px-4 py-3 font-medium">Breed / Source</th>
+                  <th className="px-4 py-3 font-medium">Breed / Strain</th>
                   <th className="px-4 py-3 font-medium">Placement</th>
                   <th className="px-4 py-3 font-medium">Age Today</th>
-                  <th className="px-4 py-3 text-right font-medium">Initial Birds</th>
+                  <th className="px-4 py-3 text-right font-medium">Surviving / Initial</th>
+                  <th className="px-4 py-3 text-right font-medium">Survival / Loss %</th>
                   <th className="px-4 py-3 text-right font-medium">Eggs Logged</th>
+                  <th className="px-4 py-3 text-right font-medium">Revenue (Eggs)</th>
+                  <th className="px-4 py-3 text-right font-medium">Expenses (Feed + Direct)</th>
+                  <th className="px-4 py-3 text-right font-medium">Net Profit / Margin</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
                 </tr>
@@ -315,6 +548,26 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                     ageTodayText = 'Check dates';
                   }
                   const metrics = batchMetrics.get(b.id) || { eggs: 0, feedKg: 0 };
+                  const mStats = mortalityStatsMap.get(b.id) || {
+                    initialCount: b.initialCount,
+                    totalLosses: 0,
+                    survivingBirds: b.initialCount,
+                    mortalityRatePct: 0,
+                    survivalRatePct: 100,
+                    entryCount: 0,
+                  };
+                  const fin = financialsMap.get(b.id) || {
+                    batchId: b.id,
+                    eggsProduced: metrics.eggs,
+                    directSalesRevenueNgn: 0,
+                    pooledSalesRevenueNgn: 0,
+                    totalRevenueNgn: 0,
+                    feedExpenseNgn: 0,
+                    directOtherExpenseNgn: 0,
+                    totalExpenseNgn: 0,
+                    netProfitNgn: 0,
+                    profitMarginPct: 0,
+                  };
 
                   return (
                     <tr key={b.id} className="hover:bg-slate-50">
@@ -324,16 +577,72 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                       </td>
                       <td className="px-4 py-3 text-slate-700">{b.penNameSnapshot}</td>
                       <td className="px-4 py-3 text-slate-600">
-                        <div>{b.breed || '—'}</div>
+                        <div>
+                          {b.breed || '—'}
+                          {b.strain && b.strain !== b.breed ? ` · ${b.strain}` : ''}
+                        </div>
                         <div className="text-slate-400">{b.source || '—'}</div>
                       </td>
-                      <td className="px-4 py-3 font-mono text-slate-700">{b.placementDate}</td>
+                      <td className="px-4 py-3 font-mono text-slate-700 whitespace-nowrap">
+                        {formatIsoDateDisplay(b.placementDate)}
+                      </td>
                       <td className="px-4 py-3 font-mono text-slate-700">{ageTodayText}</td>
-                      <td className="px-4 py-3 text-right font-mono text-slate-900">
-                        {b.initialCount.toLocaleString()}
+                      <td className="px-4 py-3 text-right font-mono">
+                        <div className="font-semibold text-slate-900">
+                          {mStats.survivingBirds.toLocaleString()}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          of {mStats.initialCount.toLocaleString()} ({mStats.totalLosses.toLocaleString()}{' '}
+                          lost)
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        <div className="font-semibold text-emerald-800">
+                          {mStats.survivalRatePct.toFixed(2)}%
+                        </div>
+                        <div className="text-[11px] text-red-700">
+                          {mStats.mortalityRatePct.toFixed(2)}% loss
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-slate-700">
                         {metrics.eggs.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        <div className="font-semibold text-slate-900">
+                          {formatNgn(fin.totalRevenueNgn)}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {fin.directSalesRevenueNgn > 0 && fin.pooledSalesRevenueNgn > 0
+                            ? `${formatNgn(fin.directSalesRevenueNgn)} direct`
+                            : fin.directSalesRevenueNgn > 0
+                            ? 'Direct sales'
+                            : fin.pooledSalesRevenueNgn > 0
+                            ? 'Pooled share'
+                            : 'No sales'}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        <div className="font-semibold text-slate-900">
+                          {formatNgn(fin.totalExpenseNgn)}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {metrics.feedKg.toFixed(1)} kg feed
+                          {fin.directOtherExpenseNgn > 0
+                            ? ` + ${formatNgn(fin.directOtherExpenseNgn)}`
+                            : ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono">
+                        <div
+                          className={`font-semibold ${
+                            fin.netProfitNgn >= 0 ? 'text-emerald-800' : 'text-red-700'
+                          }`}
+                        >
+                          {formatNgn(fin.netProfitNgn)}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {fin.totalRevenueNgn > 0 ? `${fin.profitMarginPct.toFixed(1)}% margin` : '—'}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -345,7 +654,24 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <div className="inline-flex items-center gap-2">
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenMortality(b.id, canLogMortality && b.status === 'active')
+                            }
+                            className="inline-flex items-center gap-1 rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-900 hover:bg-emerald-100 whitespace-nowrap shrink-0"
+                            title={
+                              canLogMortality && b.status === 'active'
+                                ? 'Log mortality loss for this batch'
+                                : 'View mortality history for this batch'
+                            }
+                          >
+                            <HeartPulse className="h-3 w-3" />
+                            <span>
+                              {canLogMortality && b.status === 'active' ? 'Log Loss' : 'Mortality'}
+                            </span>
+                          </button>
                           {canEdit && (
                             <button
                               type="button"
@@ -411,22 +737,6 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                  <label htmlFor="batch-code" className="block text-xs font-medium text-slate-700">
-                    Unique Batch Code <span className="text-red-600">*</span>
-                  </label>
-                  <input
-                    id="batch-code"
-                    type="text"
-                    required
-                    disabled={Boolean(editingBatch)}
-                    value={batchCode}
-                    onChange={(e) => setBatchCode(e.target.value)}
-                    placeholder="e.g. LYR-2026-01"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
-                  />
-                </div>
-
-                <div>
                   <label htmlFor="batch-pen" className="block text-xs font-medium text-slate-700">
                     Pen / House <span className="text-red-600">*</span>
                   </label>
@@ -434,7 +744,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                     id="batch-pen"
                     required
                     value={penId}
-                    onChange={(e) => setPenId(e.target.value)}
+                    onChange={(e) => handlePenChange(e.target.value)}
                     className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
                   >
                     <option value="">Select pen...</option>
@@ -452,35 +762,141 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                       })}
                   </select>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                  <label htmlFor="bird-type" className="block text-xs font-medium text-slate-700">
-                    Bird Type
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="batch-code" className="block text-xs font-medium text-slate-700">
+                      Unique Batch Code <span className="text-red-600">*</span>
+                    </label>
+                    {!editingBatch && batchCodeManual && (
+                      <button
+                        type="button"
+                        onClick={handleResetAutoBatchCode}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-800 hover:underline"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                        <span>Auto</span>
+                      </button>
+                    )}
+                  </div>
                   <input
-                    id="bird-type"
+                    id="batch-code"
                     type="text"
                     required
-                    value={birdType}
-                    onChange={(e) => setBirdType(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    disabled={Boolean(editingBatch)}
+                    value={batchCode}
+                    onChange={(e) => {
+                      setBatchCodeManual(true);
+                      setBatchCode(e.target.value);
+                    }}
+                    placeholder="e.g. PEN-1-261114"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono disabled:bg-slate-100"
                   />
+                  {!editingBatch && (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      Auto-generated from pen short code &amp; date (e.g. PEN-1-yymmdd)
+                    </p>
+                  )}
                 </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="bird-type" className="block text-xs font-medium text-slate-700">
+                    Bird Type <span className="text-red-600">*</span>
+                  </label>
+                  <select
+                    id="bird-type"
+                    required
+                    value={birdTypeChoice}
+                    onChange={(e) => setBirdTypeChoice(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {BIRD_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                    <option value="Others">Others (Specify)</option>
+                  </select>
+                  {birdTypeChoice === 'Others' && (
+                    <input
+                      type="text"
+                      required
+                      maxLength={60}
+                      value={customBirdType}
+                      onChange={(e) => setCustomBirdType(e.target.value)}
+                      placeholder="Specify bird type..."
+                      aria-label="Custom bird type"
+                      className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  )}
+                </div>
+
                 <div>
                   <label htmlFor="bird-breed" className="block text-xs font-medium text-slate-700">
-                    Breed / Strain
+                    Breed
                   </label>
-                  <input
+                  <select
                     id="bird-breed"
-                    type="text"
-                    value={breed}
-                    onChange={(e) => setBreed(e.target.value)}
-                    placeholder="e.g. ISA Brown"
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
+                    value={breedChoice}
+                    onChange={(e) => setBreedChoice(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">Select breed (Optional)...</option>
+                    {BREED_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                    <option value="Others">Others (Specify)</option>
+                  </select>
+                  {breedChoice === 'Others' && (
+                    <input
+                      type="text"
+                      required
+                      maxLength={80}
+                      value={customBreed}
+                      onChange={(e) => setCustomBreed(e.target.value)}
+                      placeholder="Specify breed..."
+                      aria-label="Custom breed"
+                      className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  )}
                 </div>
+
+                <div>
+                  <label htmlFor="bird-strain" className="block text-xs font-medium text-slate-700">
+                    Strain
+                  </label>
+                  <select
+                    id="bird-strain"
+                    value={strainChoice}
+                    onChange={(e) => setStrainChoice(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">Select strain (Optional)...</option>
+                    {STRAIN_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                    <option value="Others">Others (Specify)</option>
+                  </select>
+                  {strainChoice === 'Others' && (
+                    <input
+                      type="text"
+                      required
+                      maxLength={80}
+                      value={customStrain}
+                      onChange={(e) => setCustomStrain(e.target.value)}
+                      placeholder="Specify strain..."
+                      aria-label="Custom strain"
+                      className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  )}
+                </div>
+
                 <div>
                   <label htmlFor="bird-source" className="block text-xs font-medium text-slate-700">
                     Hatchery / Source
@@ -501,14 +917,20 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                   <label htmlFor="placement-date" className="block text-xs font-medium text-slate-700">
                     Placement Date <span className="text-red-600">*</span>
                   </label>
-                  <input
-                    id="placement-date"
-                    type="date"
-                    required
-                    value={placementDate}
-                    onChange={(e) => setPlacementDate(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
-                  />
+                  <div className="relative mt-1">
+                    <input
+                      id="placement-date"
+                      type="date"
+                      required
+                      value={placementDate}
+                      onChange={(e) => handlePlacementDateChange(e.target.value)}
+                      className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                    />
+                    <div className="flex w-full items-center justify-between rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 peer-focus:border-emerald-700 peer-focus:ring-1 peer-focus:ring-emerald-700">
+                      <span>{placementDate ? formatIsoDateDisplay(placementDate) : 'Select date'}</span>
+                      <Calendar className="h-4 w-4 text-slate-400" />
+                    </div>
+                  </div>
                 </div>
 
                 <div>

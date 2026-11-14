@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { generateId } from '../domain/calculations.ts';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
-import type { EggSale, PaymentStatus, SalesUnit } from '../types/farm.ts';
+import type { EggSale, PaymentStatus, PoultryBatch, SalesUnit } from '../types/farm.ts';
 import { buildAuditLogEntry } from './auditHelper.ts';
 
 export async function createEggSale(params: {
@@ -27,6 +27,7 @@ export async function createEggSale(params: {
   canOverridePrice: boolean;
   overrideReason: string;
   paymentStatus: PaymentStatus;
+  batch?: PoultryBatch | null;
   remarks: string;
   actorUid: string;
   actorName: string;
@@ -51,6 +52,8 @@ export async function createEggSale(params: {
 
   const totalEggsEquivalent = Math.round(params.quantity * params.salesUnit.eggCountPerUnit * 100) / 100;
   const totalAmountNgn = Math.round(params.quantity * normalizedUnitPrice * 100) / 100;
+  const batchId = params.batch?.id || '';
+  const batchCodeSnapshot = params.batch?.batchCode || '';
 
   const id = generateId('sale');
   const batchWrite = writeBatch(db);
@@ -72,6 +75,8 @@ export async function createEggSale(params: {
     overrideReason: priceOverridden ? params.overrideReason.trim().slice(0, 300) : '',
     totalAmountNgn,
     paymentStatus: params.paymentStatus,
+    batchId,
+    batchCodeSnapshot,
     remarks: params.remarks.trim().slice(0, 500),
     isVoided: false,
     voidReason: '',
@@ -99,6 +104,7 @@ export async function createEggSale(params: {
       unitPriceNgn: normalizedUnitPrice,
       totalAmountNgn,
       priceOverridden,
+      batchCodeSnapshot,
     },
     actorUid: params.actorUid,
     actorName: params.actorName,
@@ -125,6 +131,7 @@ export async function updateEggSale(params: {
   canOverridePrice: boolean;
   overrideReason: string;
   paymentStatus: PaymentStatus;
+  batch?: PoultryBatch | null;
   remarks: string;
   actorUid: string;
   actorName: string;
@@ -146,6 +153,8 @@ export async function updateEggSale(params: {
 
   const totalEggsEquivalent = Math.round(params.quantity * params.sale.eggsPerUnitSnapshot * 100) / 100;
   const totalAmountNgn = Math.round(params.quantity * normalizedPrice * 100) / 100;
+  const batchId = params.batch?.id || '';
+  const batchCodeSnapshot = params.batch?.batchCode || '';
 
   const batchWrite = writeBatch(db);
   const updates = {
@@ -162,6 +171,8 @@ export async function updateEggSale(params: {
       : params.sale.overrideReason,
     totalAmountNgn,
     paymentStatus: params.paymentStatus,
+    batchId,
+    batchCodeSnapshot,
     remarks: params.remarks.trim().slice(0, 500),
     updatedBy: params.actorUid,
     updatedAt: serverTimestamp(),
@@ -180,12 +191,14 @@ export async function updateEggSale(params: {
       unitPriceNgn: params.sale.unitPriceNgn,
       totalAmountNgn: params.sale.totalAmountNgn,
       paymentStatus: params.sale.paymentStatus,
+      batchCodeSnapshot: params.sale.batchCodeSnapshot || '',
     },
     after: {
       quantity: updates.quantity,
       unitPriceNgn: updates.unitPriceNgn,
       totalAmountNgn: updates.totalAmountNgn,
       paymentStatus: updates.paymentStatus,
+      batchCodeSnapshot,
     },
     actorUid: params.actorUid,
     actorName: params.actorName,

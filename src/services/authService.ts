@@ -192,12 +192,18 @@ export async function acceptPendingInvite(params: {
 export function subscribeFarmProfile(
   farmId: string,
   onData: (farm: Farm | null) => void,
-  onError: (err: Error) => void
+  onError: (err: Error) => void,
+  onMetadata?: (meta: { fromCache: boolean; hasPendingWrites: boolean }) => void
 ) {
   const path = `farms/${farmId}`;
   return onSnapshot(
     doc(db, 'farms', farmId),
+    { includeMetadataChanges: true },
     (snap) => {
+      onMetadata?.({
+        fromCache: snap.metadata.fromCache,
+        hasPendingWrites: snap.metadata.hasPendingWrites,
+      });
       onData(snap.exists() ? (snap.data() as Farm) : null);
     },
     (err) => {

@@ -4,6 +4,7 @@ import {
   DATE_FILTER_PRESETS,
   DEFAULT_BAG_WEIGHT_KG,
   EGGS_PER_CRATE,
+  calculateBatchMortalityStats,
   formatDateInTimezone,
   formatGramsToKgAndBags,
   formatNgn,
@@ -20,6 +21,7 @@ import type {
   FeedConsumption,
   FeedItem,
   FeedStock,
+  MortalityEntry,
   Pen,
   PoultryBatch,
   SalesUnit,
@@ -37,6 +39,7 @@ interface DashboardViewProps {
   production: EggProductionEntry[];
   consumptions: FeedConsumption[];
   sales: EggSale[];
+  mortalityEntries: MortalityEntry[];
   onNavigate: (section: NavSection) => void;
 }
 
@@ -51,6 +54,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   production,
   consumptions,
   sales,
+  mortalityEntries,
   onNavigate,
 }) => {
   const todayInTz = formatDateInTimezone(new Date(), farm.timezone);
@@ -224,7 +228,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     rangeProduction.length > 0 ||
     rangeConsumptions.length > 0 ||
     rangeSales.length > 0;
-  const activeBatchesCount = batches.filter((b) => b.status === 'active').length;
+  const activeBatches = useMemo(() => batches.filter((b) => b.status === 'active'), [batches]);
+  const activeBatchesCount = activeBatches.length;
+  const activeFlockHealth = useMemo(() => {
+    let initial = 0;
+    let surviving = 0;
+    for (const b of activeBatches) {
+      const st = calculateBatchMortalityStats(b, mortalityEntries);
+      initial += st.initialCount;
+      surviving += st.survivingBirds;
+    }
+    const survivalPct = initial > 0 ? Math.round((surviving / initial) * 10000) / 100 : 0;
+    return { initial, surviving, survivalPct };
+  }, [activeBatches, mortalityEntries]);
   const normalizedIntactCrates = Math.floor(prodTotals.intactEggs / EGGS_PER_CRATE);
   const normalizedIntactRemPieces = prodTotals.intactEggs % EGGS_PER_CRATE;
 
@@ -368,20 +384,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-900">3. Log Egg Collection</p>
-                <p className="mt-0.5 text-xs text-slate-500">{production.length} entries recorded</p>
+                <p className="text-xs font-semibold text-slate-900">3. Daily Records Hub</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {production.length} egg · {consumptions.length} feed entries
+                </p>
               </div>
               <ArrowRight className="h-4 w-4 text-slate-400 shrink-0" />
             </button>
 
             <button
               type="button"
-              onClick={() => onNavigate('feed')}
+              onClick={() => onNavigate('purchases')}
               className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-left hover:border-emerald-700 hover:bg-emerald-50/40 transition-colors"
             >
               <div>
-                <p className="text-xs font-semibold text-slate-900">4. Purchase &amp; Feed</p>
-                <p className="mt-0.5 text-xs text-slate-500">{consumptions.length} issues recorded</p>
+                <p className="text-xs font-semibold text-slate-900">4. Purchases &amp; Feed Stock</p>
+                <p className="mt-0.5 text-xs text-slate-500">Record feed &amp; medication stock</p>
               </div>
               <ArrowRight className="h-4 w-4 text-slate-400 shrink-0" />
             </button>
@@ -479,11 +497,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </p>
           <div className="mt-2 space-y-1 text-xs text-slate-600 tabular-nums">
             <p>
-              {batches
-                .filter((b) => b.status === 'active')
-                .reduce((s, b) => s + b.initialCount, 0)
-                .toLocaleString()}{' '}
-              initial birds placed
+              {activeFlockHealth.surviving.toLocaleString()} /{' '}
+              {activeFlockHealth.initial.toLocaleString()} surviving{' '}
+              {activeFlockHealth.initial > 0 && (
+                <span className="font-semibold text-emerald-800">
+                  ({activeFlockHealth.survivalPct.toFixed(1)}%)
+                </span>
+              )}
             </p>
             <p className="text-slate-500">{pens.filter((p) => p.status === 'active').length} active pens</p>
           </div>
@@ -500,10 +520,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => onNavigate('feed')}
+              onClick={() => onNavigate('purchases')}
               className="text-xs font-medium text-emerald-800 hover:underline whitespace-nowrap shrink-0"
             >
-              Manage Feed
+              Purchases &amp; Stock
             </button>
           </div>
 

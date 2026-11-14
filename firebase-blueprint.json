@@ -203,6 +203,7 @@
         "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
         "birdType": { "type": "string", "minLength": 1, "maxLength": 60 },
         "breed": { "type": "string", "maxLength": 80 },
+        "strain": { "type": "string", "maxLength": 80 },
         "source": { "type": "string", "maxLength": 120 },
         "hatchDate": { "type": "string", "maxLength": 10 },
         "ageAtPlacementDays": { "type": "integer" },
@@ -443,6 +444,8 @@
         "overrideReason": { "type": "string", "maxLength": 300 },
         "totalAmountNgn": { "type": "number" },
         "paymentStatus": { "type": "string", "enum": ["paid", "pending", "partial"] },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "batchCodeSnapshot": { "type": "string", "maxLength": 60 },
         "remarks": { "type": "string", "maxLength": 500 },
         "isVoided": { "type": "boolean" },
         "voidReason": { "type": "string", "maxLength": 300 },
@@ -500,6 +503,224 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "farmId", "entityType", "entityId", "action", "summary", "before", "after", "actorUid", "actorName", "createdAt"]
+    },
+    "MortalityEntry": {
+      "title": "MortalityEntry",
+      "description": "Daily flock mortality record per pen/batch with time of day and cause of death.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "timeOfDay": { "type": "string", "enum": ["morning", "afternoon", "night"] },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birdAgeDaysAtTransaction": { "type": "integer" },
+        "mortalityCount": { "type": "integer" },
+        "reasonCategory": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "reasonDetail": { "type": "string", "maxLength": 300 },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "farmId",
+        "transactionDate",
+        "timeOfDay",
+        "batchId",
+        "batchCodeSnapshot",
+        "penId",
+        "penNameSnapshot",
+        "birdAgeDaysAtTransaction",
+        "mortalityCount",
+        "reasonCategory",
+        "reasonDetail",
+        "remarks",
+        "isVoided",
+        "voidReason",
+        "voidedBy",
+        "createdBy",
+        "createdByName",
+        "updatedBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MedicationLog": {
+      "title": "MedicationLog",
+      "description": "Daily flock medication, vaccination, or vitamin administration log per pen/batch.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "timeOfDay": { "type": "string", "enum": ["morning", "afternoon", "night"] },
+        "transactionTime": { "type": "string", "maxLength": 5 },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birdAgeDaysAtTransaction": { "type": "integer" },
+        "medicationName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "treatmentType": { "type": "string", "enum": ["medication", "vaccination", "vitamin", "deworming", "other"] },
+        "dosage": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "administrationRoute": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "farmId", "transactionDate", "timeOfDay", "transactionTime", "batchId",
+        "batchCodeSnapshot", "penId", "penNameSnapshot", "birdAgeDaysAtTransaction",
+        "medicationName", "treatmentType", "dosage", "administrationRoute", "remarks",
+        "isVoided", "voidReason", "voidedBy", "createdBy", "createdByName", "updatedBy",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "EnvironmentMetricLog": {
+      "title": "EnvironmentMetricLog",
+      "description": "Daily flock body weight, pen temperature, and relative humidity measurements.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "timeOfDay": { "type": "string", "enum": ["morning", "afternoon", "night"] },
+        "transactionTime": { "type": "string", "maxLength": 5 },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "birdAgeDaysAtTransaction": { "type": "integer" },
+        "averageWeightGrams": { "type": "number" },
+        "sampleSize": { "type": "integer" },
+        "temperatureC": { "type": "number" },
+        "humidityPct": { "type": "number" },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "farmId", "transactionDate", "timeOfDay", "transactionTime", "batchId",
+        "batchCodeSnapshot", "penId", "penNameSnapshot", "birdAgeDaysAtTransaction",
+        "averageWeightGrams", "sampleSize", "temperatureC", "humidityPct", "remarks",
+        "isVoided", "voidReason", "voidedBy", "createdBy", "createdByName", "updatedBy",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "FarmPurchase": {
+      "title": "FarmPurchase",
+      "description": "General farm purchases (medication, vaccines, utilities, equipment, chicks, packaging) for financial P&L tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "transactionDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "category": { "type": "string", "enum": ["medication", "vaccines_vet", "supplements", "chicks_stock", "litter_bedding", "packaging", "utilities_fuel", "equipment_repairs", "labor", "other"] },
+        "itemName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "quantity": { "type": "number" },
+        "unit": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "unitPriceNgn": { "type": "number" },
+        "totalCostNgn": { "type": "number" },
+        "supplier": { "type": "string", "maxLength": 120 },
+        "reference": { "type": "string", "maxLength": 80 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "batchCodeSnapshot": { "type": "string", "maxLength": 60 },
+        "remarks": { "type": "string", "maxLength": 500 },
+        "isVoided": { "type": "boolean" },
+        "voidReason": { "type": "string", "maxLength": 300 },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "farmId", "transactionDate", "category", "itemName", "quantity", "unit",
+        "unitPriceNgn", "totalCostNgn", "supplier", "reference", "batchId",
+        "batchCodeSnapshot", "remarks", "isVoided", "voidReason", "voidedBy",
+        "createdBy", "createdByName", "updatedBy", "createdAt", "updatedAt"
+      ]
+    },
+    "RecordDraft": {
+      "title": "RecordDraft",
+      "description": "Saved work-in-progress draft for daily production or purchase data entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "draftType": { "type": "string", "enum": ["daily_production", "purchase"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "transactionDate": { "type": "string", "maxLength": 10 },
+        "batchId": { "type": "string", "maxLength": 128 },
+        "payload": { "type": "object" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "farmId", "draftType", "title", "transactionDate", "batchId",
+        "payload", "createdBy", "createdByName", "updatedBy", "createdAt", "updatedAt"
+      ]
+    },
+    "FarmReminder": {
+      "title": "FarmReminder",
+      "description": "Scheduled vaccination or batch age milestone reminder for a poultry pen/batch.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "farmId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "batchCodeSnapshot": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "penId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "penNameSnapshot": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "milestoneKey": { "type": "string", "maxLength": 80 },
+        "reminderType": { "type": "string", "enum": ["vaccination", "medication", "milestone"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "dueDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "targetAgeDays": { "type": "integer" },
+        "dosageOrAction": { "type": "string", "maxLength": 140 },
+        "notes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "completed", "dismissed"] },
+        "completedAtDate": { "type": "string", "maxLength": 10 },
+        "completedBy": { "type": "string", "maxLength": 128 },
+        "completedByName": { "type": "string", "maxLength": 150 },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "farmId", "batchId", "batchCodeSnapshot", "penId", "penNameSnapshot",
+        "milestoneKey", "reminderType", "title", "dueDate", "targetAgeDays",
+        "dosageOrAction", "notes", "status", "completedAtDate", "completedBy",
+        "completedByName", "createdBy", "createdByName", "updatedBy", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -566,6 +787,30 @@
     "/farms/{farmId}/auditLogs/{logId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
       "description": "Immutable operational audit trail."
+    },
+    "/farms/{farmId}/mortalityEntries/{entryId}": {
+      "schema": { "$ref": "#/entities/MortalityEntry" },
+      "description": "Daily batch mortality entries per pen with time of day and cause of death."
+    },
+    "/farms/{farmId}/medicationLogs/{logId}": {
+      "schema": { "$ref": "#/entities/MedicationLog" },
+      "description": "Daily medication and vaccination administration logs."
+    },
+    "/farms/{farmId}/environmentLogs/{logId}": {
+      "schema": { "$ref": "#/entities/EnvironmentMetricLog" },
+      "description": "Daily weight, temperature, and humidity measurements."
+    },
+    "/farms/{farmId}/farmPurchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/FarmPurchase" },
+      "description": "General farm and medication purchases for financial P&L."
+    },
+    "/farms/{farmId}/drafts/{draftId}": {
+      "schema": { "$ref": "#/entities/RecordDraft" },
+      "description": "Saved work-in-progress drafts for daily production and purchases."
+    },
+    "/farms/{farmId}/farmReminders/{reminderId}": {
+      "schema": { "$ref": "#/entities/FarmReminder" },
+      "description": "Scheduled vaccination and batch age milestone reminders per pen."
     }
   }
 }

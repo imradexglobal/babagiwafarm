@@ -3,6 +3,7 @@ import { Download, RefreshCw } from 'lucide-react';
 import {
   DATE_FILTER_PRESETS,
   DEFAULT_BAG_WEIGHT_KG,
+  calculateBatchMortalityStats,
   downloadCsv,
   formatDateInTimezone,
   formatGramsToKgAndBags,
@@ -11,6 +12,7 @@ import {
   resolveDateRange,
 } from '../domain/calculations.ts';
 import { useDateRangeAnalytics } from '../hooks/useDateRangeAnalytics.ts';
+import { PURCHASE_CATEGORY_LABEL } from '../services/purchasesService.ts';
 import type {
   AuditLog,
   DateFilterPreset,
@@ -18,7 +20,9 @@ import type {
   FarmMember,
   FeedItem,
   FeedStock,
+  MortalityEntry,
   PoultryBatch,
+  PurchaseCategory,
 } from '../types/farm.ts';
 
 interface ReportsViewProps {
@@ -27,6 +31,7 @@ interface ReportsViewProps {
   batches: PoultryBatch[];
   feedItems: FeedItem[];
   feedStocks: FeedStock[];
+  mortalityEntries: MortalityEntry[];
   auditLogs: AuditLog[];
 }
 
@@ -36,10 +41,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   batches,
   feedItems,
   feedStocks,
+  mortalityEntries,
   auditLogs,
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
-  const [reportTab, setReportTab] = useState<'production' | 'feed' | 'sales' | 'audit'>('production');
+  const [reportTab, setReportTab] = useState<
+    'production' | 'feed' | 'purchases' | 'sales' | 'mortality' | 'audit'
+  >('production');
   const [preset, setPreset] = useState<DateFilterPreset>('month');
   const [customStart, setCustomStart] = useState(`${todayStr.slice(0, 7)}-01`);
   const [customEnd, setCustomEnd] = useState(todayStr);
@@ -51,6 +59,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const canReadProd = hasPermission(member, 'production', 'read') || hasPermission(member, 'reports', 'read');
   const canReadFeed = hasPermission(member, 'feed', 'read') || hasPermission(member, 'reports', 'read');
   const canReadSales = hasPermission(member, 'sales', 'read') || hasPermission(member, 'reports', 'read');
+  const canReadMortality =
+    hasPermission(member, 'batches', 'read') ||
+    hasPermission(member, 'production', 'read') ||
+    hasPermission(member, 'reports', 'read');
   const canReadAudit = member.role === 'owner' || hasPermission(member, 'reports', 'read');
 
   const { startDate, endDate } = useMemo(
@@ -61,8 +73,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const {
     production,
     purchases,
+    farmPurchases,
     consumptions,
     sales,
+    mortality,
+    medicationLogs,
+    environmentLogs,
     isFetching,
     fetchError,
     refetch,
@@ -74,6 +90,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     canReadProd,
     canReadFeed,
     canReadSales,
+    canReadMortality,
+    canReadMedication: canReadProd || canReadMortality,
+    canReadEnvironment: canReadProd || canReadMortality,
+    canReadFarmPurchases: canReadFeed,
     includePurchases: true,
   });
 
@@ -185,6 +205,216 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     return Array.from(map.values());
   }, [filteredSales]);
 
+  // Mortality Report Data
+  const filteredMortality = useMemo(() => {
+    if (!canReadMortality) return [];
+    return mortality.filter(
+      (m) =>
+        !m.isVoided &&
+        m.transactionDate >= startDate &&
+        m.transactionDate <= endDate &&
+        (batchFilter === 'all' || m.batchId === batchFilter)
+    );
+  }, [mortality, startDate, endDate, batchFilter, canReadMortality]);
+
+  const mortalityByBatch = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        batchId: string;
+        batchCode: string;
+        penName: string;
+        entries: number;
+        morning: number;
+        afternoon: number;
+        night: number;
+        periodLosses: number;
+      }
+    >();
+    for (const m of filteredMortality) {
+      const cur = map.get(m.batchId) || {
+        batchId: m.batchId,
+        batchCode: m.batchCodeSnapshot,
+        penName: m.penNameSnapshot,
+        entries: 0,
+        morning: 0,
+        afternoon: 0,
+        night: 0,
+        periodLosses: 0,
+      };
+      cur.entries += 1;
+      cur.periodLosses += m.mortalityCount;
+      if (m.timeOfDay === 'morning') cur.morning += m.mortalityCount;
+      else if (m.timeOfDay === 'afternoon') cur.afternoon += m.mortalityCount;
+      else if (m.timeOfDay === 'night') cur.night += m.mortalityCount;
+      map.set(m.batchId, cur);
+    }
+    return Array.from(map.values()).map((row) => {
+      const batch = batches.find((b) => b.id === row.batchId);
+      const stats = batch ? calculateBatchMortalityStats(batch, mortalityEntries) : null;
+      return {
+        ...row,
+        initialCount: stats?.initialCount ?? 0,
+        survivingBirds: stats?.survivingBirds ?? 0,
+        survivalRatePct: stats?.survivalRatePct ?? 0,
+      };
+    });
+  }, [filteredMortality, batches, mortalityEntries]);
+
+  const mortalityByReason = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of filteredMortality) {
+      map.set(m.reasonCategory, (map.get(m.reasonCategory) || 0) + m.mortalityCount);
+    }
+    return Array.from(map.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [filteredMortality]);
+
+  const filteredMedications = useMemo(() => {
+    if (!canReadProd && !canReadMortality) return [];
+    return medicationLogs.filter(
+      (m) =>
+        !m.isVoided &&
+        m.transactionDate >= startDate &&
+        m.transactionDate <= endDate &&
+        (batchFilter === 'all' || m.batchId === batchFilter)
+    );
+  }, [medicationLogs, startDate, endDate, batchFilter, canReadProd, canReadMortality]);
+
+  const filteredEnvironment = useMemo(() => {
+    if (!canReadProd && !canReadMortality) return [];
+    return environmentLogs.filter(
+      (e) =>
+        !e.isVoided &&
+        e.transactionDate >= startDate &&
+        e.transactionDate <= endDate &&
+        (batchFilter === 'all' || e.batchId === batchFilter)
+    );
+  }, [environmentLogs, startDate, endDate, batchFilter, canReadProd, canReadMortality]);
+
+  const filteredFarmPurchases = useMemo(() => {
+    if (!canReadFeed) return [];
+    return farmPurchases.filter(
+      (p) =>
+        !p.isVoided &&
+        p.transactionDate >= startDate &&
+        p.transactionDate <= endDate &&
+        (batchFilter === 'all' || p.batchId === batchFilter)
+    );
+  }, [farmPurchases, startDate, endDate, batchFilter, canReadFeed]);
+
+  // Daily multi-entry aggregates across eggs, feed, mortality, medication, weight, temperature, humidity
+  const dailyAggregates = useMemo(() => {
+    const byDate = new Map<
+      string,
+      {
+        date: string;
+        eggPickups: number;
+        intactEggs: number;
+        crackedDamaged: number;
+        totalEggs: number;
+        feedKg: number;
+        mortalityBirds: number;
+        medEntries: number;
+        weights: number[];
+        temps: number[];
+        humidities: number[];
+      }
+    >();
+
+    const ensure = (d: string) => {
+      if (!byDate.has(d)) {
+        byDate.set(d, {
+          date: d,
+          eggPickups: 0,
+          intactEggs: 0,
+          crackedDamaged: 0,
+          totalEggs: 0,
+          feedKg: 0,
+          mortalityBirds: 0,
+          medEntries: 0,
+          weights: [],
+          temps: [],
+          humidities: [],
+        });
+      }
+      return byDate.get(d)!;
+    };
+
+    for (const p of filteredProd) {
+      const row = ensure(p.transactionDate);
+      row.eggPickups += 1;
+      row.intactEggs += p.intactEggs;
+      row.crackedDamaged += p.crackedEggs + p.damagedEggs;
+      row.totalEggs += p.totalEggs;
+    }
+    for (const c of filteredConsumptions) {
+      const row = ensure(c.transactionDate);
+      row.feedKg += c.standardizedGrams / 1000;
+    }
+    for (const m of filteredMortality) {
+      const row = ensure(m.transactionDate);
+      row.mortalityBirds += m.mortalityCount;
+    }
+    for (const med of filteredMedications) {
+      const row = ensure(med.transactionDate);
+      row.medEntries += 1;
+    }
+    for (const env of filteredEnvironment) {
+      const row = ensure(env.transactionDate);
+      if (env.averageWeightGrams !== null) row.weights.push(env.averageWeightGrams);
+      if (env.temperatureC !== null) row.temps.push(env.temperatureC);
+      if (env.humidityPct !== null) row.humidities.push(env.humidityPct);
+    }
+
+    const avg = (arr: number[]) =>
+      arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : null;
+
+    return Array.from(byDate.values())
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .map((r) => ({
+        ...r,
+        avgWeightG: avg(r.weights),
+        avgTempC: avg(r.temps),
+        minTempC: r.temps.length > 0 ? Math.min(...r.temps) : null,
+        maxTempC: r.temps.length > 0 ? Math.max(...r.temps) : null,
+        avgHumidityPct: avg(r.humidities),
+      }));
+  }, [
+    filteredProd,
+    filteredConsumptions,
+    filteredMortality,
+    filteredMedications,
+    filteredEnvironment,
+  ]);
+
+  const farmPurchasesByCategory = useMemo(() => {
+    const map = new Map<PurchaseCategory, { category: PurchaseCategory; count: number; totalNgn: number }>();
+    for (const p of filteredFarmPurchases) {
+      const cur = map.get(p.category) || { category: p.category, count: 0, totalNgn: 0 };
+      cur.count += 1;
+      cur.totalNgn += p.totalCostNgn;
+      map.set(p.category, cur);
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalNgn - a.totalNgn);
+  }, [filteredFarmPurchases]);
+
+  const pnlTotals = useMemo(() => {
+    const eggSalesNgn = filteredSales.reduce((s, item) => s + item.totalAmountNgn, 0);
+    const feedConsCostNgn = filteredConsumptions.reduce((s, item) => s + item.totalCostNgn, 0);
+    const feedPurchasesNgn = filteredPurchases.reduce((s, item) => s + item.totalCostNgn, 0);
+    const otherPurchasesNgn = filteredFarmPurchases.reduce((s, item) => s + item.totalCostNgn, 0);
+    const netOperatingNgn = eggSalesNgn - feedConsCostNgn - otherPurchasesNgn;
+    return {
+      eggSalesNgn,
+      feedConsCostNgn,
+      feedPurchasesNgn,
+      otherPurchasesNgn,
+      netOperatingNgn,
+    };
+  }, [filteredSales, filteredConsumptions, filteredPurchases, filteredFarmPurchases]);
+
   const handleExportCsv = () => {
     if (!canExport) return;
     if (reportTab === 'production') {
@@ -287,6 +517,66 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         ]),
         `babagiwa_egg_sales_${startDate}_to_${endDate}.csv`
       );
+    } else if (reportTab === 'mortality') {
+      downloadCsv(
+        [
+          'Date',
+          'Time of Day',
+          'Batch',
+          'Pen',
+          'Bird Age (Days)',
+          'Birds Lost',
+          'Reason Category',
+          'Reason Details',
+          'Recorded By',
+          'Remarks',
+        ],
+        filteredMortality.map((m) => [
+          m.transactionDate,
+          m.timeOfDay,
+          m.batchCodeSnapshot,
+          m.penNameSnapshot,
+          m.birdAgeDaysAtTransaction,
+          m.mortalityCount,
+          m.reasonCategory,
+          m.reasonDetail,
+          m.createdByName,
+          m.remarks,
+        ]),
+        `babagiwa_mortality_${startDate}_to_${endDate}.csv`
+      );
+    } else if (reportTab === 'purchases') {
+      downloadCsv(
+        [
+          'Date',
+          'Category',
+          'Item / Expense',
+          'Quantity',
+          'Unit',
+          'Unit Price (NGN)',
+          'Total Cost (NGN)',
+          'Batch',
+          'Supplier',
+          'Reference',
+          'Recorded By',
+          'Remarks',
+        ],
+        filteredFarmPurchases.map((p) => [
+          p.transactionDate,
+          PURCHASE_CATEGORY_LABEL[p.category] || p.category,
+          p.itemName,
+          p.quantity,
+          p.unit,
+          p.unitPriceNgn.toFixed(2),
+          p.totalCostNgn.toFixed(2),
+          p.batchCodeSnapshot || 'Farm-wide',
+          p.supplier,
+          p.reference,
+          p.createdByName,
+          p.remarks,
+        ]),
+        `babagiwa_farm_purchases_${startDate}_to_${endDate}.csv`
+      );
     } else if (reportTab === 'audit') {
       downloadCsv(
         ['Entity Type', 'Entity ID', 'Action', 'Summary', 'Actor'],
@@ -304,7 +594,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             Operational Reports &amp; Audit Trail
           </h1>
           <p className="mt-1 text-xs text-slate-500">
-            All metrics reflect persisted non-voided transactions in timezone {farm.timezone}.
+            All metrics reflect aggregated non-voided transactions in timezone {farm.timezone}.
           </p>
         </div>
 
@@ -323,9 +613,11 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       {/* Report Tabs */}
       <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 w-fit">
         {[
-          { id: 'production', label: 'Egg Production Report', visible: canReadProd },
-          { id: 'feed', label: 'Feed & Cost Report', visible: canReadFeed },
+          { id: 'production', label: 'Daily Production & Health', visible: canReadProd },
+          { id: 'feed', label: 'Feed & Stock Report', visible: canReadFeed },
+          { id: 'purchases', label: 'Purchases & Farm P&L', visible: canReadFeed || canReadSales },
           { id: 'sales', label: 'Egg Sales Report', visible: canReadSales },
+          { id: 'mortality', label: 'Mortality & Survival', visible: canReadMortality },
           { id: 'audit', label: 'Audit Trail', visible: canReadAudit },
         ]
           .filter((t) => t.visible)
@@ -436,7 +728,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               />
             </div>
 
-            {(reportTab === 'production' || reportTab === 'feed') && (
+            {(reportTab === 'production' ||
+              reportTab === 'feed' ||
+              reportTab === 'purchases' ||
+              reportTab === 'mortality') && (
               <div>
                 <label htmlFor="rep-batch" className="block text-xs font-medium text-slate-600">
                   Batch Filter
@@ -501,6 +796,112 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       {reportTab === 'production' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Daily Production &amp; Environment Aggregates
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Multiple morning/afternoon/night recordings on the same date are summed (eggs, feed, mortality, meds) or averaged (weight, temperature, humidity).
+                </p>
+              </div>
+              {canExport && dailyAggregates.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadCsv(
+                      [
+                        'Date',
+                        'Egg Pickups',
+                        'Intact Eggs',
+                        'Cracked/Damaged',
+                        'Total Eggs',
+                        'Feed Issued (kg)',
+                        'Mortality Losses',
+                        'Medication Logs',
+                        'Avg Bird Weight (g)',
+                        'Avg Temp (C)',
+                        'Avg Humidity (%)',
+                      ],
+                      dailyAggregates.map((r) => [
+                        r.date,
+                        r.eggPickups,
+                        r.intactEggs,
+                        r.crackedDamaged,
+                        r.totalEggs,
+                        r.feedKg.toFixed(2),
+                        r.mortalityBirds,
+                        r.medEntries,
+                        r.avgWeightG !== null ? r.avgWeightG.toFixed(0) : '',
+                        r.avgTempC !== null ? r.avgTempC.toFixed(1) : '',
+                        r.avgHumidityPct !== null ? r.avgHumidityPct.toFixed(1) : '',
+                      ]),
+                      `babagiwa_daily_aggregates_${startDate}_to_${endDate}.csv`
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+                >
+                  <Download className="h-3.5 w-3.5 text-emerald-800" />
+                  <span>Export Daily Aggregates</span>
+                </button>
+              )}
+            </div>
+
+            {dailyAggregates.length === 0 ? (
+              <p className="py-4 text-xs text-slate-500">
+                No daily production, feed, medication, mortality, or environment entries in selected range.
+              </p>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Date</th>
+                      <th className="py-2 text-right font-medium">Pickups</th>
+                      <th className="py-2 text-right font-medium">Total Eggs</th>
+                      <th className="py-2 text-right font-medium">Feed (kg)</th>
+                      <th className="py-2 text-right font-medium">Mortality</th>
+                      <th className="py-2 text-right font-medium">Meds</th>
+                      <th className="py-2 text-right font-medium">Avg Weight</th>
+                      <th className="py-2 text-right font-medium">Temp °C</th>
+                      <th className="py-2 text-right font-medium">Humidity %</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
+                    {dailyAggregates.map((row) => (
+                      <tr key={row.date} className="hover:bg-slate-50">
+                        <td className="py-2.5 pr-2 font-semibold text-slate-900">{row.date}</td>
+                        <td className="py-2.5 text-right text-slate-600">{row.eggPickups}</td>
+                        <td className="py-2.5 text-right font-semibold text-emerald-800">
+                          {row.totalEggs.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 text-right text-slate-800">{row.feedKg.toFixed(2)}</td>
+                        <td className="py-2.5 text-right text-red-700">
+                          {row.mortalityBirds > 0 ? row.mortalityBirds.toLocaleString() : '0'}
+                        </td>
+                        <td className="py-2.5 text-right text-slate-700">{row.medEntries}</td>
+                        <td className="py-2.5 text-right text-slate-700">
+                          {row.avgWeightG !== null ? `${row.avgWeightG.toFixed(0)} g` : '—'}
+                        </td>
+                        <td className="py-2.5 text-right text-slate-700">
+                          {row.avgTempC !== null
+                            ? row.minTempC !== row.maxTempC
+                              ? `${row.avgTempC.toFixed(1)}° (${row.minTempC?.toFixed(0)}–${row.maxTempC?.toFixed(0)})`
+                              : `${row.avgTempC.toFixed(1)}°`
+                            : '—'}
+                        </td>
+                        <td className="py-2.5 text-right text-slate-700">
+                          {row.avgHumidityPct !== null ? `${row.avgHumidityPct.toFixed(1)}%` : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
             <h2 className="text-sm font-semibold text-slate-900">
               Production Breakdown by Batch (Transaction Totals)
             </h2>
@@ -546,6 +947,167 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               </div>
             )}
           </div>
+
+          {filteredMedications.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Medication &amp; Vaccination Logs ({filteredMedications.length})
+              </h2>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Date / Shift</th>
+                      <th className="py-2 font-medium">Batch</th>
+                      <th className="py-2 font-medium">Treatment</th>
+                      <th className="py-2 font-medium">Dosage &amp; Route</th>
+                      <th className="py-2 font-medium">Recorded By</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredMedications.map((m) => (
+                      <tr key={m.id}>
+                        <td className="py-2 font-mono text-slate-700">
+                          {m.transactionDate} ({m.timeOfDay})
+                        </td>
+                        <td className="py-2 font-mono text-slate-900">{m.batchCodeSnapshot}</td>
+                        <td className="py-2">
+                          <span className="font-semibold text-slate-900">{m.medicationName}</span>{' '}
+                          <span className="capitalize text-slate-500">({m.treatmentType})</span>
+                        </td>
+                        <td className="py-2 text-slate-700">
+                          {m.dosage} · {m.administrationRoute}
+                        </td>
+                        <td className="py-2 text-slate-600">{m.createdByName}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {reportTab === 'purchases' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-4 tabular-nums">
+            <div>
+              <p className="text-xs text-slate-500">Egg Sales Revenue (Period)</p>
+              <p className="mt-1 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(pnlTotals.eggSalesNgn)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Feed Consumption Cost (Locked)</p>
+              <p className="mt-1 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(pnlTotals.feedConsCostNgn)}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Feed stock-in cash: {formatNgn(pnlTotals.feedPurchasesNgn)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Medication &amp; General Purchases</p>
+              <p className="mt-1 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(pnlTotals.otherPurchasesNgn)}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                {filteredFarmPurchases.length} purchase records
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Net Operating Result (Period)</p>
+              <p
+                className={`mt-1 font-mono text-lg font-bold ${
+                  pnlTotals.netOperatingNgn >= 0 ? 'text-emerald-800' : 'text-red-700'
+                }`}
+              >
+                {formatNgn(pnlTotals.netOperatingNgn)}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Egg sales minus feed used &amp; general purchases
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Non-Feed Purchases Breakdown by Category
+            </h2>
+            {farmPurchasesByCategory.length === 0 ? (
+              <p className="py-4 text-xs text-slate-500">
+                No medication or general farm purchases recorded in selected range.
+              </p>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Category</th>
+                      <th className="py-2 text-right font-medium">Entries</th>
+                      <th className="py-2 text-right font-medium">Total Cost (NGN)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 tabular-nums">
+                    {farmPurchasesByCategory.map((row) => (
+                      <tr key={row.category}>
+                        <td className="py-2.5 font-medium text-slate-900">
+                          {PURCHASE_CATEGORY_LABEL[row.category] || row.category}
+                        </td>
+                        <td className="py-2.5 text-right font-mono text-slate-700">{row.count}</td>
+                        <td className="py-2.5 text-right font-mono font-semibold text-slate-900">
+                          {formatNgn(row.totalNgn)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {filteredFarmPurchases.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Medication &amp; General Purchases Ledger ({filteredFarmPurchases.length})
+              </h2>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Date</th>
+                      <th className="py-2 font-medium">Category</th>
+                      <th className="py-2 font-medium">Item / Expense</th>
+                      <th className="py-2 font-medium">Batch</th>
+                      <th className="py-2 text-right font-medium">Qty / Unit</th>
+                      <th className="py-2 text-right font-medium">Total (NGN)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 tabular-nums">
+                    {filteredFarmPurchases.map((p) => (
+                      <tr key={p.id}>
+                        <td className="py-2 font-mono text-slate-700">{p.transactionDate}</td>
+                        <td className="py-2 text-slate-600">
+                          {PURCHASE_CATEGORY_LABEL[p.category] || p.category}
+                        </td>
+                        <td className="py-2 font-medium text-slate-900">{p.itemName}</td>
+                        <td className="py-2 font-mono text-slate-600">
+                          {p.batchCodeSnapshot || 'Farm-wide'}
+                        </td>
+                        <td className="py-2 text-right font-mono text-slate-700">
+                          {p.quantity} {p.unit}
+                        </td>
+                        <td className="py-2 text-right font-mono font-semibold text-slate-900">
+                          {formatNgn(p.totalCostNgn)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -663,6 +1225,86 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {reportTab === 'mortality' && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Mortality Breakdown by Batch &amp; Pen (Period + Cumulative Survival)
+            </h2>
+            {mortalityByBatch.length === 0 ? (
+              <p className="py-4 text-xs text-slate-500">
+                No mortality entries recorded in selected date range.
+              </p>
+            ) : (
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Batch / Pen</th>
+                      <th className="py-2 text-right font-medium">Entries</th>
+                      <th className="py-2 text-right font-medium">Morning</th>
+                      <th className="py-2 text-right font-medium">Afternoon</th>
+                      <th className="py-2 text-right font-medium">Night</th>
+                      <th className="py-2 text-right font-medium">Period Losses</th>
+                      <th className="py-2 text-right font-medium">Cumulative Survival</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
+                    {mortalityByBatch.map((row) => (
+                      <tr key={row.batchId}>
+                        <td className="py-2.5 font-sans">
+                          <span className="font-semibold text-slate-900">{row.batchCode}</span> ·{' '}
+                          <span className="text-slate-500">{row.penName}</span>
+                        </td>
+                        <td className="py-2.5 text-right">{row.entries}</td>
+                        <td className="py-2.5 text-right text-amber-800">{row.morning}</td>
+                        <td className="py-2.5 text-right text-sky-800">{row.afternoon}</td>
+                        <td className="py-2.5 text-right text-indigo-800">{row.night}</td>
+                        <td className="py-2.5 text-right font-semibold text-red-700">
+                          {row.periodLosses.toLocaleString()}
+                        </td>
+                        <td className="py-2.5 text-right font-semibold text-emerald-800">
+                          {row.survivalRatePct.toFixed(2)}% ({row.survivingBirds.toLocaleString()}/
+                          {row.initialCount.toLocaleString()})
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {mortalityByReason.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <h2 className="text-sm font-semibold text-slate-900">
+                Period Losses by Reason for Death
+              </h2>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-500">
+                      <th className="py-2 font-medium">Reason for Death</th>
+                      <th className="py-2 text-right font-medium">Birds Lost</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 tabular-nums">
+                    {mortalityByReason.map((r) => (
+                      <tr key={r.reason}>
+                        <td className="py-2 font-medium text-slate-900">{r.reason}</td>
+                        <td className="py-2 text-right font-mono font-semibold text-red-700">
+                          {r.count.toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

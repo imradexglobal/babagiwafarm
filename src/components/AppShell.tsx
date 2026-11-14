@@ -1,23 +1,27 @@
 import React, { useState } from 'react';
 import {
   BarChart3,
-  Egg,
+  ClipboardList,
+  Cloud,
   FileSpreadsheet,
   Layers,
   LogOut,
   Menu,
+  RefreshCw,
   Settings,
   ShoppingBag,
-  Wheat,
+  ShoppingCart,
+  WifiOff,
   X,
 } from 'lucide-react';
 import { hasPermission } from '../domain/calculations.ts';
+import type { FirebaseSyncState } from '../lib/firebaseSync.ts';
 import type { Farm, FarmMember } from '../types/farm.ts';
 
 export type NavSection =
   | 'dashboard'
   | 'production'
-  | 'feed'
+  | 'purchases'
   | 'sales'
   | 'batches'
   | 'reports'
@@ -27,6 +31,7 @@ interface AppShellProps {
   farm: Farm;
   member: FarmMember;
   activeSection: NavSection;
+  syncState?: FirebaseSyncState;
   onSelectSection: (section: NavSection) => void;
   onSignOut: () => Promise<void>;
   children: React.ReactNode;
@@ -36,6 +41,7 @@ export const AppShell: React.FC<AppShellProps> = ({
   farm,
   member,
   activeSection,
+  syncState = 'synced',
   onSelectSection,
   onSignOut,
   children,
@@ -51,21 +57,25 @@ export const AppShell: React.FC<AppShellProps> = ({
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3, visible: true },
     {
       id: 'production',
-      label: 'Egg Production',
-      icon: Egg,
-      visible: hasPermission(member, 'production', 'read'),
+      label: 'Daily Records',
+      icon: ClipboardList,
+      visible:
+        hasPermission(member, 'production', 'read') ||
+        hasPermission(member, 'production', 'create') ||
+        hasPermission(member, 'feed', 'read') ||
+        hasPermission(member, 'batches', 'read'),
     },
     {
-      id: 'feed',
-      label: 'Feed & Stock',
-      icon: Wheat,
-      visible: hasPermission(member, 'feed', 'read'),
+      id: 'purchases',
+      label: 'Purchases & Stock',
+      icon: ShoppingCart,
+      visible: hasPermission(member, 'feed', 'read') || hasPermission(member, 'feed', 'create'),
     },
     {
       id: 'sales',
       label: 'Egg Sales',
       icon: ShoppingBag,
-      visible: hasPermission(member, 'sales', 'read'),
+      visible: hasPermission(member, 'sales', 'read') || hasPermission(member, 'sales', 'create'),
     },
     {
       id: 'batches',
@@ -231,6 +241,48 @@ export const AppShell: React.FC<AppShellProps> = ({
           </div>
 
           <div className="flex items-center gap-3 text-xs text-slate-500 shrink-0">
+            <div
+              role="status"
+              aria-live="polite"
+              data-sync-state={syncState}
+              title={
+                syncState === 'offline'
+                  ? 'Operating in offline mode — changes will sync to Firebase when back online'
+                  : syncState === 'syncing'
+                  ? 'Syncing farm records with Firebase'
+                  : 'All farm records synced with Firebase'
+              }
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
+                syncState === 'offline'
+                  ? 'font-medium text-amber-800'
+                  : syncState === 'syncing'
+                  ? 'font-medium text-slate-600'
+                  : 'text-slate-400'
+              }`}
+            >
+              {syncState === 'offline' && (
+                <>
+                  <WifiOff className="h-3.5 w-3.5 shrink-0 text-amber-700" aria-hidden="true" />
+                  <span>Offline mode</span>
+                </>
+              )}
+              {syncState === 'syncing' && (
+                <>
+                  <RefreshCw
+                    className="h-3.5 w-3.5 shrink-0 animate-spin text-emerald-700"
+                    aria-hidden="true"
+                  />
+                  <span>Syncing...</span>
+                </>
+              )}
+              {syncState === 'synced' && (
+                <>
+                  <Cloud className="h-3.5 w-3.5 shrink-0 text-emerald-700/75" aria-hidden="true" />
+                  <span>Synced</span>
+                </>
+              )}
+            </div>
+            <span className="hidden sm:inline h-3.5 w-px bg-slate-200" aria-hidden="true" />
             <span className="hidden sm:inline font-mono">{farm.timezone}</span>
           </div>
         </header>

@@ -167,6 +167,7 @@ export interface PoultryBatch {
   penNameSnapshot: string;
   birdType: string;
   breed: string;
+  strain?: string;
   source: string;
   hatchDate: string;
   ageAtPlacementDays: number;
@@ -290,6 +291,8 @@ export interface EggSale {
   overrideReason: string;
   totalAmountNgn: number;
   paymentStatus: PaymentStatus;
+  batchId?: string;
+  batchCodeSnapshot?: string;
   remarks: string;
   isVoided: boolean;
   voidReason: string;
@@ -323,6 +326,203 @@ export interface AuditLog {
   createdAt: unknown;
 }
 
+export type TimeOfDay = 'morning' | 'afternoon' | 'night';
+
+export interface MortalityEntry {
+  id: string;
+  farmId: string;
+  transactionDate: string;
+  timeOfDay: TimeOfDay;
+  batchId: string;
+  batchCodeSnapshot: string;
+  penId: string;
+  penNameSnapshot: string;
+  birdAgeDaysAtTransaction: number;
+  mortalityCount: number;
+  reasonCategory: string;
+  reasonDetail: string;
+  remarks: string;
+  isVoided: boolean;
+  voidReason: string;
+  voidedBy: string;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export type MedicationTreatmentType =
+  | 'medication'
+  | 'vaccination'
+  | 'vitamin'
+  | 'deworming'
+  | 'other';
+
+export interface MedicationLog {
+  id: string;
+  farmId: string;
+  transactionDate: string;
+  timeOfDay: TimeOfDay;
+  transactionTime: string;
+  batchId: string;
+  batchCodeSnapshot: string;
+  penId: string;
+  penNameSnapshot: string;
+  birdAgeDaysAtTransaction: number;
+  medicationName: string;
+  treatmentType: MedicationTreatmentType;
+  dosage: string;
+  administrationRoute: string;
+  remarks: string;
+  isVoided: boolean;
+  voidReason: string;
+  voidedBy: string;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface EnvironmentMetricLog {
+  id: string;
+  farmId: string;
+  transactionDate: string;
+  timeOfDay: TimeOfDay;
+  transactionTime: string;
+  batchId: string;
+  batchCodeSnapshot: string;
+  penId: string;
+  penNameSnapshot: string;
+  birdAgeDaysAtTransaction: number;
+  averageWeightGrams: number | null;
+  sampleSize: number;
+  temperatureC: number | null;
+  humidityPct: number | null;
+  remarks: string;
+  isVoided: boolean;
+  voidReason: string;
+  voidedBy: string;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export type PurchaseCategory =
+  | 'medication'
+  | 'vaccines_vet'
+  | 'supplements'
+  | 'chicks_stock'
+  | 'litter_bedding'
+  | 'packaging'
+  | 'utilities_fuel'
+  | 'equipment_repairs'
+  | 'labor'
+  | 'other';
+
+export interface FarmPurchase {
+  id: string;
+  farmId: string;
+  transactionDate: string;
+  category: PurchaseCategory;
+  itemName: string;
+  quantity: number;
+  unit: string;
+  unitPriceNgn: number;
+  totalCostNgn: number;
+  supplier: string;
+  reference: string;
+  batchId: string;
+  batchCodeSnapshot: string;
+  remarks: string;
+  isVoided: boolean;
+  voidReason: string;
+  voidedBy: string;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export type DraftType = 'daily_production' | 'purchase';
+
+export interface DailyProductionDraftPayload {
+  transactionDate: string;
+  timeOfDay: TimeOfDay;
+  transactionTime: string;
+  batchId: string;
+  includeEgg: boolean;
+  crates: string;
+  pieces: string;
+  crackedEggs: string;
+  damagedEggs: string;
+  eggRemarks: string;
+  includeFeed: boolean;
+  feedItemId: string;
+  feedQuantity: string;
+  feedUnit: FeedUnit;
+  feedRemarks: string;
+  includeMedication: boolean;
+  medicationName: string;
+  treatmentType: MedicationTreatmentType;
+  dosage: string;
+  administrationRoute: string;
+  medicationRemarks: string;
+  includeMortality: boolean;
+  mortalityCount: string;
+  reasonCategory: string;
+  reasonDetail: string;
+  mortalityRemarks: string;
+  includeMetrics?: boolean;
+  includeWeight?: boolean;
+  averageWeightGrams: string;
+  sampleSize: string;
+  weightRemarks?: string;
+  includeEnvironment?: boolean;
+  temperatureC: string;
+  humidityPct: string;
+  environmentRemarks?: string;
+  metricsRemarks?: string;
+}
+
+export interface PurchaseDraftPayload {
+  kind: 'feed' | 'general';
+  transactionDate: string;
+  feedItemId: string;
+  feedQty: string;
+  feedUnit: FeedUnit;
+  feedBagWeight: string;
+  feedUnitPrice: string;
+  category: PurchaseCategory;
+  itemName: string;
+  quantity: string;
+  unit: string;
+  unitPriceNgn: string;
+  batchId: string;
+  supplier: string;
+  reference: string;
+  remarks: string;
+}
+
+export interface RecordDraft {
+  id: string;
+  farmId: string;
+  draftType: DraftType;
+  title: string;
+  transactionDate: string;
+  batchId: string;
+  payload: Record<string, unknown>;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
 export type DateFilterPreset =
   | 'today'
   | 'yesterday'
@@ -331,3 +531,32 @@ export type DateFilterPreset =
   | 'month'
   | 'ytd'
   | 'custom';
+
+export type ReminderType = 'vaccination' | 'medication' | 'milestone';
+export type ReminderStatus = 'pending' | 'completed' | 'dismissed';
+
+export interface FarmReminder {
+  id: string;
+  farmId: string;
+  batchId: string;
+  batchCodeSnapshot: string;
+  penId: string;
+  penNameSnapshot: string;
+  milestoneKey: string;
+  reminderType: ReminderType;
+  title: string;
+  dueDate: string;
+  targetAgeDays: number | null;
+  dosageOrAction: string;
+  notes: string;
+  status: ReminderStatus;
+  completedAtDate: string;
+  completedBy: string;
+  completedByName: string;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+

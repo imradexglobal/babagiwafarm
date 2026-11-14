@@ -2,15 +2,16 @@ import { useCallback, useEffect, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { AppShell, type NavSection } from './components/AppShell.tsx';
 import { BatchesView } from './components/BatchesView.tsx';
+import { DailyProductionView, type DailyProductionSubTab } from './components/DailyProductionView.tsx';
 import { DashboardView } from './components/DashboardView.tsx';
-import { FeedView } from './components/FeedView.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
 import { OnboardingView } from './components/OnboardingView.tsx';
-import { ProductionView } from './components/ProductionView.tsx';
+import { PurchasesView } from './components/PurchasesView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
 import { SalesView } from './components/SalesView.tsx';
 import { SettingsView } from './components/SettingsView.tsx';
 import { hasPermission } from './domain/calculations.ts';
+import { useFirebaseSyncStatus } from './hooks/useFirebaseSyncStatus.ts';
 import { auth, formatUserFriendlyError } from './lib/firebase.ts';
 import {
   acceptPendingInvite,
@@ -24,6 +25,11 @@ import {
 } from './services/authService.ts';
 import { subscribeBatches } from './services/batchService.ts';
 import {
+  subscribeEnvironmentLogs,
+  subscribeMedicationLogs,
+} from './services/dailyRecordsService.ts';
+import { subscribeRecordDrafts } from './services/draftsService.ts';
+import {
   subscribeAuditLogs,
   subscribeFeedItems,
   subscribeFeedStock,
@@ -33,22 +39,31 @@ import {
   subscribeSalesUnits,
 } from './services/farmSetupService.ts';
 import { subscribeFeedConsumption, subscribeFeedPurchases } from './services/feedService.ts';
+import { subscribeMortalityEntries } from './services/mortalityService.ts';
 import { subscribeEggProduction } from './services/productionService.ts';
+import { subscribeFarmPurchases } from './services/purchasesService.ts';
+import { subscribeFarmReminders } from './services/remindersService.ts';
 import { subscribeEggSales } from './services/salesService.ts';
 import type {
   AuditLog,
   EggProductionEntry,
   EggSale,
+  EnvironmentMetricLog,
   Farm,
   FarmInvite,
   FarmMember,
+  FarmPurchase,
+  FarmReminder,
   FeedConsumption,
   FeedItem,
   FeedPurchase,
   FeedStock,
+  MedicationLog,
+  MortalityEntry,
   Pen,
   PendingInvite,
   PoultryBatch,
+  RecordDraft,
   SalesUnit,
   UserFarmBinding,
 } from './types/farm.ts';
@@ -75,11 +90,26 @@ export default function App() {
   const [batches, setBatches] = useState<PoultryBatch[]>([]);
   const [production, setProduction] = useState<EggProductionEntry[]>([]);
   const [purchases, setPurchases] = useState<FeedPurchase[]>([]);
+  const [farmPurchases, setFarmPurchases] = useState<FarmPurchase[]>([]);
   const [consumptions, setConsumptions] = useState<FeedConsumption[]>([]);
   const [sales, setSales] = useState<EggSale[]>([]);
+  const [mortalityEntries, setMortalityEntries] = useState<MortalityEntry[]>([]);
+  const [medicationLogs, setMedicationLogs] = useState<MedicationLog[]>([]);
+  const [environmentLogs, setEnvironmentLogs] = useState<EnvironmentMetricLog[]>([]);
+  const [drafts, setDrafts] = useState<RecordDraft[]>([]);
+  const [farmReminders, setFarmReminders] = useState<FarmReminder[]>([]);
   const [members, setMembers] = useState<FarmMember[]>([]);
   const [invites, setInvites] = useState<FarmInvite[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  // Linked BatchesView -> DailyProductionView (Mortality tab) navigation context
+  const [dailyInitialSubTab, setDailyInitialSubTab] = useState<DailyProductionSubTab>('egg');
+  const [mortalityInitialBatchId, setMortalityInitialBatchId] = useState<string | undefined>(
+    undefined
+  );
+  const [mortalityAutoOpenModal, setMortalityAutoOpenModal] = useState(false);
+
+  const { syncState, onFarmMetadata } = useFirebaseSyncStatus(Boolean(authReady && user && userBinding));
 
   const loadBinding = useCallback(async (currentUser: User) => {
     setBindingLoading(true);
@@ -119,8 +149,14 @@ export default function App() {
         setBatches([]);
         setProduction([]);
         setPurchases([]);
+        setFarmPurchases([]);
         setConsumptions([]);
         setSales([]);
+        setMortalityEntries([]);
+        setMedicationLogs([]);
+        setEnvironmentLogs([]);
+        setDrafts([]);
+        setFarmReminders([]);
         setMembers([]);
         setInvites([]);
         setAuditLogs([]);
@@ -137,7 +173,8 @@ export default function App() {
     const unsubFarm = subscribeFarmProfile(
       farmId,
       (f) => setFarm(f),
-      (err) => setDataError(formatUserFriendlyError(err))
+      (err) => setDataError(formatUserFriendlyError(err)),
+      onFarmMetadata
     );
     const unsubMember = subscribeCurrentMember(
       farmId,
@@ -150,7 +187,7 @@ export default function App() {
       unsubFarm();
       unsubMember();
     };
-  }, [authReady, user, userBinding]);
+  }, [authReady, user, userBinding, onFarmMetadata]);
 
   // Permission-gated subscriptions for operational collections
   useEffect(() => {
@@ -159,12 +196,13 @@ export default function App() {
     const unsubs: (() => void)[] = [];
     const onErr = (err: Error) => setDataError(formatUserFriendlyError(err));
 
-    // Active members can read reference setup & batches
+    // Active members can read reference setup, batches, and saved drafts
     unsubs.push(subscribePens(farmId, setPens, onErr));
     unsubs.push(subscribeFeedItems(farmId, setFeedItems, onErr));
     unsubs.push(subscribeFeedStock(farmId, setFeedStocks, onErr));
     unsubs.push(subscribeSalesUnits(farmId, setSalesUnits, onErr));
     unsubs.push(subscribeBatches(farmId, setBatches, onErr));
+    unsubs.push(subscribeRecordDrafts(farmId, setDrafts, onErr));
 
     const canReadReports = hasPermission(member, 'reports', 'read') || member.role === 'owner';
 
@@ -174,9 +212,20 @@ export default function App() {
     if (hasPermission(member, 'feed', 'read') || canReadReports) {
       unsubs.push(subscribeFeedPurchases(farmId, setPurchases, onErr));
       unsubs.push(subscribeFeedConsumption(farmId, setConsumptions, onErr));
+      unsubs.push(subscribeFarmPurchases(farmId, setFarmPurchases, onErr));
     }
     if (hasPermission(member, 'sales', 'read') || canReadReports) {
       unsubs.push(subscribeEggSales(farmId, setSales, onErr));
+    }
+    if (
+      hasPermission(member, 'batches', 'read') ||
+      hasPermission(member, 'production', 'read') ||
+      canReadReports
+    ) {
+      unsubs.push(subscribeMortalityEntries(farmId, setMortalityEntries, onErr));
+      unsubs.push(subscribeMedicationLogs(farmId, setMedicationLogs, onErr));
+      unsubs.push(subscribeEnvironmentLogs(farmId, setEnvironmentLogs, onErr));
+      unsubs.push(subscribeFarmReminders(farmId, setFarmReminders, onErr));
     }
     if (hasPermission(member, 'members', 'read') || member.role === 'owner') {
       unsubs.push(subscribeMembers(farmId, setMembers, onErr));
@@ -203,6 +252,25 @@ export default function App() {
   const handleSignOut = async () => {
     await signOutUser();
     setActiveSection('dashboard');
+    setDailyInitialSubTab('egg');
+    setMortalityInitialBatchId(undefined);
+    setMortalityAutoOpenModal(false);
+  };
+
+  const handleOpenMortality = (batchId?: string, openModal: boolean = false) => {
+    setDailyInitialSubTab('mortality');
+    setMortalityInitialBatchId(batchId);
+    setMortalityAutoOpenModal(openModal);
+    setActiveSection('production');
+  };
+
+  const handleSelectSection = (section: NavSection) => {
+    if (section === 'production') {
+      setDailyInitialSubTab('egg');
+      setMortalityInitialBatchId(undefined);
+      setMortalityAutoOpenModal(false);
+    }
+    setActiveSection(section);
   };
 
   const handleCreateFarm = async (params: {
@@ -300,7 +368,8 @@ export default function App() {
       farm={farm}
       member={member}
       activeSection={activeSection}
-      onSelectSection={setActiveSection}
+      syncState={syncState}
+      onSelectSection={handleSelectSection}
       onSignOut={handleSignOut}
     >
       {dataError && (
@@ -324,28 +393,44 @@ export default function App() {
           production={production}
           consumptions={consumptions}
           sales={sales}
-          onNavigate={setActiveSection}
+          mortalityEntries={mortalityEntries}
+          onNavigate={handleSelectSection}
         />
       )}
 
       {activeSection === 'production' && (
-        <ProductionView
-          farm={farm}
-          member={member}
-          batches={batches}
-          production={production}
-        />
-      )}
-
-      {activeSection === 'feed' && (
-        <FeedView
+        <DailyProductionView
           farm={farm}
           member={member}
           batches={batches}
           feedItems={feedItems}
           feedStocks={feedStocks}
-          purchases={purchases}
+          feedPurchases={purchases}
+          production={production}
           consumptions={consumptions}
+          medicationLogs={medicationLogs}
+          mortalityEntries={mortalityEntries}
+          environmentLogs={environmentLogs}
+          drafts={drafts}
+          farmReminders={farmReminders}
+          initialSubTab={dailyInitialSubTab}
+          initialBatchFilter={mortalityInitialBatchId}
+          autoOpenRecordModal={mortalityAutoOpenModal}
+          onConsumedAutoOpen={() => setMortalityAutoOpenModal(false)}
+          onBackToBatches={() => setActiveSection('batches')}
+        />
+      )}
+
+      {activeSection === 'purchases' && (
+        <PurchasesView
+          farm={farm}
+          member={member}
+          batches={batches}
+          feedItems={feedItems}
+          feedStocks={feedStocks}
+          feedPurchases={purchases}
+          farmPurchases={farmPurchases}
+          drafts={drafts}
         />
       )}
 
@@ -353,6 +438,7 @@ export default function App() {
         <SalesView
           farm={farm}
           member={member}
+          batches={batches}
           salesUnits={salesUnits}
           sales={sales}
         />
@@ -366,6 +452,10 @@ export default function App() {
           batches={batches}
           production={production}
           consumptions={consumptions}
+          sales={sales}
+          farmPurchases={farmPurchases}
+          mortalityEntries={mortalityEntries}
+          onOpenMortality={handleOpenMortality}
         />
       )}
 
@@ -376,6 +466,7 @@ export default function App() {
           batches={batches}
           feedItems={feedItems}
           feedStocks={feedStocks}
+          mortalityEntries={mortalityEntries}
           auditLogs={auditLogs}
         />
       )}

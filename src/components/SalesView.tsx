@@ -7,17 +7,31 @@ import {
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
 import { createEggSale, updateEggSale, voidEggSale } from '../services/salesService.ts';
-import type { EggSale, Farm, FarmMember, PaymentStatus, SalesUnit } from '../types/farm.ts';
+import type {
+  EggSale,
+  Farm,
+  FarmMember,
+  PaymentStatus,
+  PoultryBatch,
+  SalesUnit,
+} from '../types/farm.ts';
 import { ConfirmVoidModal } from './ConfirmVoidModal.tsx';
 
 interface SalesViewProps {
   farm: Farm;
   member: FarmMember;
+  batches: PoultryBatch[];
   salesUnits: SalesUnit[];
   sales: EggSale[];
 }
 
-export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, sales }) => {
+export const SalesView: React.FC<SalesViewProps> = ({
+  farm,
+  member,
+  batches,
+  salesUnits,
+  sales,
+}) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
   const canCreate = hasPermission(member, 'sales', 'create');
   const canEdit = hasPermission(member, 'sales', 'edit');
@@ -26,6 +40,8 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
 
   const activeUnits = useMemo(() => salesUnits.filter((u) => u.status === 'active'), [salesUnits]);
   const unitById = useMemo(() => new Map(salesUnits.map((u) => [u.id, u])), [salesUnits]);
+  const activeBatches = useMemo(() => batches.filter((b) => b.status === 'active'), [batches]);
+  const batchById = useMemo(() => new Map(batches.map((b) => [b.id, b])), [batches]);
 
   // Filters
   const [startDate, setStartDate] = useState(`${todayStr.slice(0, 7)}-01`);
@@ -48,6 +64,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
   const [unitPriceNgn, setUnitPriceNgn] = useState('0');
   const [overrideReason, setOverrideReason] = useState('');
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus>('paid');
+  const [selectedBatchId, setSelectedBatchId] = useState('');
   const [remarks, setRemarks] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -87,6 +104,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
     setUnitPriceNgn(String(first?.currentPriceNgn ?? 0));
     setOverrideReason('');
     setPaymentStatus('paid');
+    setSelectedBatchId('');
     setRemarks('');
     setFormError(null);
     setModalOpen(true);
@@ -103,6 +121,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
     setUnitPriceNgn(String(s.unitPriceNgn));
     setOverrideReason(s.overrideReason);
     setPaymentStatus(s.paymentStatus);
+    setSelectedBatchId(s.batchId || '');
     setRemarks(s.remarks);
     setFormError(null);
     setModalOpen(true);
@@ -123,6 +142,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
     try {
       const qty = Number(quantity);
       const price = Number(unitPriceNgn);
+      const selectedBatch = selectedBatchId ? batchById.get(selectedBatchId) || null : null;
       if (editingSale) {
         await updateEggSale({
           farmId: farm.farmId,
@@ -136,6 +156,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
           canOverridePrice,
           overrideReason,
           paymentStatus,
+          batch: selectedBatch,
           remarks,
           actorUid: member.uid,
           actorName: member.displayName,
@@ -156,6 +177,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
           canOverridePrice,
           overrideReason,
           paymentStatus,
+          batch: selectedBatch,
           remarks,
           actorUid: member.uid,
           actorName: member.displayName,
@@ -293,6 +315,7 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
                   <th className="px-4 py-3 font-medium">Date</th>
                   <th className="px-4 py-3 font-medium">Customer / Category</th>
+                  <th className="px-4 py-3 font-medium">Flock / Batch</th>
                   <th className="px-4 py-3 font-medium">Selling Unit</th>
                   <th className="px-4 py-3 text-right font-medium">Qty</th>
                   <th className="px-4 py-3 text-right font-medium">Unit Price</th>
@@ -313,6 +336,15 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">{s.customerName || 'Walk-in Customer'}</div>
                       <div className="text-slate-500">{s.eggCategory}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {s.batchCodeSnapshot ? (
+                        <span className="inline-flex rounded border border-emerald-200 bg-emerald-50 px-2 py-0.5 font-mono text-[11px] font-medium text-emerald-900">
+                          {s.batchCodeSnapshot}
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">Pooled (Farm Room)</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div>{s.unitNameSnapshot}</div>
@@ -577,6 +609,34 @@ export const SalesView: React.FC<SalesViewProps> = ({ farm, member, salesUnits, 
                 <strong className="font-mono text-base text-emerald-800">
                   {formatNgn(previewTotal)}
                 </strong>
+              </div>
+
+              <div>
+                <label htmlFor="sale-batch" className="block text-xs font-medium text-slate-700">
+                  Flock / Batch Attribution (Optional)
+                </label>
+                <select
+                  id="sale-batch"
+                  value={selectedBatchId}
+                  onChange={(e) => setSelectedBatchId(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="">Pooled / Farm Egg Room (Allocate by egg production share)</option>
+                  {activeBatches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.batchCode} ({b.penNameSnapshot})
+                    </option>
+                  ))}
+                  {editingSale?.batchId &&
+                    !activeBatches.some((b) => b.id === editingSale.batchId) && (
+                      <option value={editingSale.batchId}>
+                        {editingSale.batchCodeSnapshot || editingSale.batchId} (Inactive)
+                      </option>
+                    )}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Tag a specific flock for direct batch profitability, or leave pooled to split across laying batches by production share.
+                </p>
               </div>
 
               <div>
