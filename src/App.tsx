@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { AppShell, type NavSection } from './components/AppShell.tsx';
+import { AccountsView } from './components/AccountsView.tsx';
 import { BatchesView } from './components/BatchesView.tsx';
+import { EggStoreView } from './components/EggStoreView.tsx';
 import { DailyProductionView, type DailyProductionSubTab } from './components/DailyProductionView.tsx';
 import { DashboardView } from './components/DashboardView.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
@@ -13,8 +15,10 @@ import { SettingsView } from './components/SettingsView.tsx';
 import { hasPermission } from './domain/calculations.ts';
 import { useFirebaseSyncStatus } from './hooks/useFirebaseSyncStatus.ts';
 import { auth, formatUserFriendlyError } from './lib/firebase.ts';
+import { Building2, RefreshCw } from 'lucide-react';
 import {
   acceptPendingInvite,
+  clearUserBinding,
   createFarmAndOwner,
   getPendingInviteForEmail,
   getUserBinding,
@@ -24,6 +28,7 @@ import {
   subscribeFarmProfile,
 } from './services/authService.ts';
 import { subscribeBatches } from './services/batchService.ts';
+import { subscribeCarePlans } from './services/carePlanService.ts';
 import {
   subscribeEnvironmentLogs,
   subscribeMedicationLogs,
@@ -44,8 +49,24 @@ import { subscribeEggProduction } from './services/productionService.ts';
 import { subscribeFarmPurchases } from './services/purchasesService.ts';
 import { subscribeFarmReminders } from './services/remindersService.ts';
 import { subscribeEggSales } from './services/salesService.ts';
+import {
+  subscribeAccountPayments,
+  subscribeCustomers,
+  subscribePurchaseInvoices,
+  subscribeSalesInvoices,
+  subscribeVendors,
+} from './services/accountsService.ts';
+import {
+  subscribeEggInventoryBalances,
+  subscribeEggInventoryMovements,
+  subscribeEggSortingBatches,
+  subscribeEggStoreReceipts,
+  subscribeEggStoreSettings,
+  subscribeEggTransfers,
+} from './services/eggStoreService.ts';
 import type {
   AuditLog,
+  CarePlan,
   EggProductionEntry,
   EggSale,
   EnvironmentMetricLog,
@@ -67,6 +88,21 @@ import type {
   SalesUnit,
   UserFarmBinding,
 } from './types/farm.ts';
+import type {
+  AccountPayment,
+  Customer,
+  PurchaseInvoice,
+  SalesInvoice,
+  Vendor,
+} from './types/accounts.ts';
+import type {
+  EggInventoryBalance,
+  EggInventoryMovement,
+  EggSortingBatch,
+  EggStoreReceipt,
+  EggStoreSettings,
+  EggTransfer,
+} from './types/eggStore.ts';
 
 export default function App() {
   const [authReady, setAuthReady] = useState(false);
@@ -79,6 +115,12 @@ export default function App() {
 
   const [farm, setFarm] = useState<Farm | null>(null);
   const [member, setMember] = useState<FarmMember | null>(null);
+  const [farmLoaded, setFarmLoaded] = useState(false);
+  const [memberLoaded, setMemberLoaded] = useState(false);
+  const [farmMissing, setFarmMissing] = useState(false);
+  const [memberMissing, setMemberMissing] = useState(false);
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+  const [reloadSeq, setReloadSeq] = useState(0);
   const [dataError, setDataError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
 
@@ -88,6 +130,7 @@ export default function App() {
   const [feedStocks, setFeedStocks] = useState<FeedStock[]>([]);
   const [salesUnits, setSalesUnits] = useState<SalesUnit[]>([]);
   const [batches, setBatches] = useState<PoultryBatch[]>([]);
+  const [carePlans, setCarePlans] = useState<CarePlan[]>([]);
   const [production, setProduction] = useState<EggProductionEntry[]>([]);
   const [purchases, setPurchases] = useState<FeedPurchase[]>([]);
   const [farmPurchases, setFarmPurchases] = useState<FarmPurchase[]>([]);
@@ -101,6 +144,17 @@ export default function App() {
   const [members, setMembers] = useState<FarmMember[]>([]);
   const [invites, setInvites] = useState<FarmInvite[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [salesInvoices, setSalesInvoices] = useState<SalesInvoice[]>([]);
+  const [purchaseInvoices, setPurchaseInvoices] = useState<PurchaseInvoice[]>([]);
+  const [accountPayments, setAccountPayments] = useState<AccountPayment[]>([]);
+  const [eggStoreSettings, setEggStoreSettings] = useState<EggStoreSettings | null>(null);
+  const [eggTransfers, setEggTransfers] = useState<EggTransfer[]>([]);
+  const [eggStoreReceipts, setEggStoreReceipts] = useState<EggStoreReceipt[]>([]);
+  const [eggSortingBatches, setEggSortingBatches] = useState<EggSortingBatch[]>([]);
+  const [eggInventoryBalances, setEggInventoryBalances] = useState<EggInventoryBalance[]>([]);
+  const [eggInventoryMovements, setEggInventoryMovements] = useState<EggInventoryMovement[]>([]);
 
   // Linked BatchesView -> DailyProductionView (Mortality tab) navigation context
   const [dailyInitialSubTab, setDailyInitialSubTab] = useState<DailyProductionSubTab>('egg');
@@ -160,6 +214,17 @@ export default function App() {
         setMembers([]);
         setInvites([]);
         setAuditLogs([]);
+        setCustomers([]);
+        setVendors([]);
+        setSalesInvoices([]);
+        setPurchaseInvoices([]);
+        setAccountPayments([]);
+        setEggStoreSettings(null);
+        setEggTransfers([]);
+        setEggStoreReceipts([]);
+        setEggSortingBatches([]);
+        setEggInventoryBalances([]);
+        setEggInventoryMovements([]);
       }
     });
     return unsub;
@@ -167,27 +232,71 @@ export default function App() {
 
   // Subscribe to farm profile and current member record once userBinding exists
   useEffect(() => {
-    if (!authReady || !user || !userBinding) return;
+    if (!authReady || !user || !userBinding) {
+      setFarm(null);
+      setMember(null);
+      setFarmLoaded(false);
+      setMemberLoaded(false);
+      setFarmMissing(false);
+      setMemberMissing(false);
+      return;
+    }
     const farmId = userBinding.farmId;
 
     const unsubFarm = subscribeFarmProfile(
       farmId,
-      (f) => setFarm(f),
-      (err) => setDataError(formatUserFriendlyError(err)),
+      (f) => {
+        setFarmLoaded(true);
+        if (f) {
+          setFarm(f);
+          setFarmMissing(false);
+        } else {
+          setFarm(null);
+          setFarmMissing(true);
+        }
+      },
+      (err) => {
+        setFarmLoaded(true);
+        setDataError(formatUserFriendlyError(err));
+      },
       onFarmMetadata
     );
     const unsubMember = subscribeCurrentMember(
       farmId,
       user.uid,
-      (m) => setMember(m),
-      (err) => setDataError(formatUserFriendlyError(err))
+      (m) => {
+        setMemberLoaded(true);
+        if (m) {
+          setMember(m);
+          setMemberMissing(false);
+        } else {
+          setMember(null);
+          setMemberMissing(true);
+        }
+      },
+      (err) => {
+        setMemberLoaded(true);
+        setDataError(formatUserFriendlyError(err));
+      }
     );
 
     return () => {
       unsubFarm();
       unsubMember();
     };
-  }, [authReady, user, userBinding, onFarmMetadata]);
+  }, [authReady, user, userBinding, onFarmMetadata, reloadSeq]);
+
+  // Loading safety timeout: if workspace configuration is taking long, offer retry and reset
+  useEffect(() => {
+    if (!userBinding || (farm && member) || farmMissing || memberMissing) {
+      setLoadTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setLoadTimedOut(true);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [userBinding, farm, member, farmMissing, memberMissing]);
 
   // Permission-gated subscriptions for operational collections
   useEffect(() => {
@@ -202,11 +311,12 @@ export default function App() {
     unsubs.push(subscribeFeedStock(farmId, setFeedStocks, onErr));
     unsubs.push(subscribeSalesUnits(farmId, setSalesUnits, onErr));
     unsubs.push(subscribeBatches(farmId, setBatches, onErr));
+    unsubs.push(subscribeCarePlans(farmId, setCarePlans, onErr));
     unsubs.push(subscribeRecordDrafts(farmId, setDrafts, onErr));
 
     const canReadReports = hasPermission(member, 'reports', 'read') || member.role === 'owner';
 
-    if (hasPermission(member, 'production', 'read') || canReadReports) {
+    if (hasPermission(member, 'production', 'read') || canReadReports || hasPermission(member, 'eggStore', 'transfer')) {
       unsubs.push(subscribeEggProduction(farmId, setProduction, onErr));
     }
     if (hasPermission(member, 'feed', 'read') || canReadReports) {
@@ -216,6 +326,29 @@ export default function App() {
     }
     if (hasPermission(member, 'sales', 'read') || canReadReports) {
       unsubs.push(subscribeEggSales(farmId, setSales, onErr));
+    }
+    const canReadAccounts = member.role === 'owner' || canReadReports ||
+      hasPermission(member, 'sales', 'read') || hasPermission(member, 'sales', 'create') ||
+      hasPermission(member, 'feed', 'read') || hasPermission(member, 'feed', 'create');
+    if (canReadAccounts) {
+      unsubs.push(subscribeCustomers(farmId, setCustomers, onErr));
+      unsubs.push(subscribeVendors(farmId, setVendors, onErr));
+      unsubs.push(subscribeSalesInvoices(farmId, setSalesInvoices, onErr));
+      unsubs.push(subscribePurchaseInvoices(farmId, setPurchaseInvoices, onErr));
+      unsubs.push(subscribeAccountPayments(farmId, setAccountPayments, onErr));
+    }
+    const canUseEggStore = member.role === 'owner' || canReadReports ||
+      hasPermission(member, 'eggStore', 'read') || hasPermission(member, 'eggStore', 'transfer') ||
+      hasPermission(member, 'eggStore', 'receive') || hasPermission(member, 'eggStore', 'sort') ||
+      hasPermission(member, 'eggStore', 'adjust') || hasPermission(member, 'eggStore', 'distribute') ||
+      hasPermission(member, 'eggStore', 'dispose') || hasPermission(member, 'settings', 'edit');
+    if (canUseEggStore) {
+      unsubs.push(subscribeEggStoreSettings(farmId, setEggStoreSettings, onErr));
+      unsubs.push(subscribeEggTransfers(farmId, setEggTransfers, onErr));
+      unsubs.push(subscribeEggStoreReceipts(farmId, setEggStoreReceipts, onErr));
+      unsubs.push(subscribeEggSortingBatches(farmId, setEggSortingBatches, onErr));
+      unsubs.push(subscribeEggInventoryBalances(farmId, setEggInventoryBalances, onErr));
+      unsubs.push(subscribeEggInventoryMovements(farmId, setEggInventoryMovements, onErr));
     }
     if (
       hasPermission(member, 'batches', 'read') ||
@@ -249,12 +382,55 @@ export default function App() {
     }
   };
 
+  const handleRetry = () => {
+    setDataError(null);
+    setFarmLoaded(false);
+    setMemberLoaded(false);
+    setFarmMissing(false);
+    setMemberMissing(false);
+    setLoadTimedOut(false);
+    setReloadSeq((s) => s + 1);
+    if (user) {
+      void loadBinding(user);
+    }
+  };
+
+  const handleResetBinding = async () => {
+    if (!user) return;
+    try {
+      await clearUserBinding(user.uid);
+      setUserBinding(null);
+      setFarm(null);
+      setMember(null);
+      setFarmLoaded(false);
+      setMemberLoaded(false);
+      setFarmMissing(false);
+      setMemberMissing(false);
+      setLoadTimedOut(false);
+      setDataError(null);
+      if (user.email) {
+        const invite = await getPendingInviteForEmail(user.email);
+        setPendingInvite(invite);
+      }
+    } catch (err) {
+      setDataError(formatUserFriendlyError(err));
+    }
+  };
+
   const handleSignOut = async () => {
     await signOutUser();
     setActiveSection('dashboard');
     setDailyInitialSubTab('egg');
     setMortalityInitialBatchId(undefined);
     setMortalityAutoOpenModal(false);
+    setFarm(null);
+    setMember(null);
+    setFarmLoaded(false);
+    setMemberLoaded(false);
+    setFarmMissing(false);
+    setMemberMissing(false);
+    setLoadTimedOut(false);
+    setDataError(null);
   };
 
   const handleOpenMortality = (batchId?: string, openModal: boolean = false) => {
@@ -319,25 +495,92 @@ export default function App() {
   }
 
   if (!farm || !member) {
+    const isMissing = farmMissing || memberMissing;
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
-        <div className="max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center">
-          <p className="font-display text-base font-semibold text-slate-900">Loading Farm Workspace</p>
-          <p className="mt-1 text-xs text-slate-500">
-            Fetching farm configuration and membership permissions...
-          </p>
+        <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm space-y-4">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-800">
+            {isMissing ? (
+              <Building2 className="h-6 w-6 text-amber-600" />
+            ) : (
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-800 border-t-transparent" />
+            )}
+          </div>
+
+          <div>
+            <h1 className="font-display text-base font-semibold text-slate-900">
+              {isMissing ? 'Farm Workspace Not Found' : 'Loading Farm Workspace'}
+            </h1>
+            <p className="mt-1 text-xs text-slate-500">
+              {isMissing
+                ? farmMissing
+                  ? `The farm associated with this account (ID: ${userBinding.farmId}) could not be found in the database. It may have been removed or reset.`
+                  : `Your membership record in farm "${farm?.name || userBinding.farmId}" could not be found or has not been activated.`
+                : loadTimedOut
+                ? 'Connecting to the farm workspace is taking longer than expected. You can retry or reset your workspace link below.'
+                : 'Fetching farm configuration and membership permissions...'}
+            </p>
+          </div>
+
           {dataError && (
-            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 text-left">
               {dataError}
             </div>
           )}
-          <button
-            type="button"
-            onClick={handleSignOut}
-            className="mt-4 rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100"
-          >
-            Sign Out
-          </button>
+
+          {/* Diagnostic Info */}
+          <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-left text-[11px] text-slate-600 space-y-1">
+            <div className="flex justify-between">
+              <span className="font-medium text-slate-500">Account:</span>
+              <span className="font-mono truncate max-w-[200px]">{user.email}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="font-medium text-slate-500">Farm ID:</span>
+              <span className="font-mono">{userBinding.farmId}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="font-medium text-slate-500">Farm Record:</span>
+              <span>{farmLoaded ? (farm ? 'Found' : 'Not found in database') : 'Connecting...'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="font-medium text-slate-500">Member Record:</span>
+              <span>{memberLoaded ? (member ? 'Active' : 'Not found in database') : 'Connecting...'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="font-medium text-slate-500">Sync Status:</span>
+              <span className="capitalize">{syncState}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 pt-2">
+            {(isMissing || loadTimedOut) && (
+              <button
+                type="button"
+                onClick={handleResetBinding}
+                className="w-full rounded-lg bg-emerald-800 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-900 transition-colors"
+              >
+                Create or Link Another Farm
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleRetry}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Retry Connection</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="w-full rounded-lg border border-slate-200 px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -421,6 +664,21 @@ export default function App() {
         />
       )}
 
+      {activeSection === 'eggStore' && (
+        <EggStoreView
+          farm={farm}
+          member={member}
+          pens={pens}
+          production={production}
+          settings={eggStoreSettings}
+          transfers={eggTransfers}
+          receipts={eggStoreReceipts}
+          sortingBatches={eggSortingBatches}
+          balances={eggInventoryBalances}
+          movements={eggInventoryMovements}
+        />
+      )}
+
       {activeSection === 'purchases' && (
         <PurchasesView
           farm={farm}
@@ -431,6 +689,8 @@ export default function App() {
           feedPurchases={purchases}
           farmPurchases={farmPurchases}
           drafts={drafts}
+          vendors={vendors}
+          purchaseInvoices={purchaseInvoices}
         />
       )}
 
@@ -441,6 +701,22 @@ export default function App() {
           batches={batches}
           salesUnits={salesUnits}
           sales={sales}
+          customers={customers}
+          salesInvoices={salesInvoices}
+          eggStoreSettings={eggStoreSettings}
+          inventoryBalances={eggInventoryBalances}
+        />
+      )}
+
+      {activeSection === 'accounts' && (
+        <AccountsView
+          farm={farm}
+          member={member}
+          customers={customers}
+          vendors={vendors}
+          salesInvoices={salesInvoices}
+          purchaseInvoices={purchaseInvoices}
+          payments={accountPayments}
         />
       )}
 
@@ -455,6 +731,7 @@ export default function App() {
           sales={sales}
           farmPurchases={farmPurchases}
           mortalityEntries={mortalityEntries}
+          carePlans={carePlans}
           onOpenMortality={handleOpenMortality}
         />
       )}
@@ -480,6 +757,7 @@ export default function App() {
           salesUnits={salesUnits}
           members={members}
           invites={invites}
+          carePlans={carePlans}
         />
       )}
     </AppShell>

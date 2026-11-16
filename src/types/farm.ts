@@ -1,5 +1,9 @@
 export type SectorType = 'poultry';
 
+export type DepartmentType = 'poultry' | 'fishery' | 'crops' | 'livestock' | 'general';
+
+export type RecurrenceUnit = 'once' | 'hour' | 'day' | 'week' | 'month';
+
 export type MemberRole = 'owner' | 'staff';
 export type MemberStatus = 'active' | 'inactive';
 
@@ -8,6 +12,10 @@ export interface CrudPermission {
   create: boolean;
   edit: boolean;
   delete: boolean;
+}
+
+export interface ProductionPermission extends CrudPermission {
+  approve: boolean;
 }
 
 export interface SalesPermission extends CrudPermission {
@@ -29,14 +37,25 @@ export interface MembersPermission {
   manage: boolean;
 }
 
+export interface EggStorePermission {
+  read: boolean;
+  transfer: boolean;
+  receive: boolean;
+  sort: boolean;
+  adjust: boolean;
+  distribute: boolean;
+  dispose: boolean;
+}
+
 export interface PermissionsMatrix {
   batches: CrudPermission;
-  production: CrudPermission;
+  production: ProductionPermission;
   feed: CrudPermission;
   sales: SalesPermission;
   reports: ReportsPermission;
   settings: SettingsPermission;
   members: MembersPermission;
+  eggStore: EggStorePermission;
 }
 
 export interface UserFarmBinding {
@@ -58,6 +77,8 @@ export interface PendingInvite {
   jobTitle: string;
   role: 'staff';
   permissions: PermissionsMatrix;
+  departments?: DepartmentType[];
+  assignedPenIds?: string[];
   status: 'pending' | 'accepted' | 'revoked';
   invitedBy: string;
   acceptedByUid: string;
@@ -88,6 +109,8 @@ export interface FarmMember {
   role: MemberRole;
   status: MemberStatus;
   permissions: PermissionsMatrix;
+  departments?: DepartmentType[];     // which departments this member can access
+  assignedPenIds?: string[];          // pens this member is assigned to monitor
   createdBy: string;
   createdAt: unknown;
   updatedAt: unknown;
@@ -100,6 +123,8 @@ export interface FarmInvite {
   emailLower: string;
   jobTitle: string;
   permissions: PermissionsMatrix;
+  departments?: DepartmentType[];
+  assignedPenIds?: string[];
   status: 'pending' | 'accepted' | 'revoked';
   invitedBy: string;
   acceptedByUid: string;
@@ -116,6 +141,8 @@ export interface Pen {
   sector: 'poultry';
   activeBatchId: string;
   notes: string;
+  department?: DepartmentType;        // which department this pen belongs to
+  assignedMemberUids?: string[];      // staff UIDs assigned to this pen
   status: 'active' | 'inactive';
   createdBy: string;
   createdAt: unknown;
@@ -182,6 +209,7 @@ export interface PoultryBatch {
   updatedBy: string;
   createdAt: unknown;
   updatedAt: unknown;
+  assignedCarePlanIds?: string[];   // care plan IDs assigned at batch creation
 }
 
 export interface EggProductionEntry {
@@ -209,6 +237,32 @@ export interface EggProductionEntry {
   updatedBy: string;
   createdAt: unknown;
   updatedAt: unknown;
+  parentId?: string;
+  status?: ProductionStatus;
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: unknown;
+  approvalAuditId?: string;
+}
+
+export type ProductionStatus = 'PENDING' | 'APPROVED' | 'VOIDED';
+
+export interface ProductionRecord {
+  id: string;
+  farmId: string;
+  batchId: string;
+  batchCodeSnapshot: string;
+  transactionDate: string;
+  status: ProductionStatus;
+  createdBy: string;
+  createdByName: string;
+  createdAt: unknown;
+  updatedBy: string;
+  updatedAt: unknown;
+  approvedBy: string;
+  approvedByName: string;
+  approvedAt: unknown;
+  approvalAuditId: string;
 }
 
 export type FeedUnit = 'kg' | 'bags';
@@ -307,6 +361,7 @@ export interface EggSale {
 export type AuditAction =
   | 'create'
   | 'update'
+  | 'delete'
   | 'void'
   | 'status_change'
   | 'price_override'
@@ -558,5 +613,47 @@ export interface FarmReminder {
   updatedBy: string;
   createdAt: unknown;
   updatedAt: unknown;
+  // Care plan linkage
+  carePlanId?: string;
+  carePlanItemId?: string;
+  // Recurrence
+  intervalUnit?: RecurrenceUnit;
+  intervalValue?: number;
+  occurrenceIndex?: number;    // 0-based, which repetition this is
+  parentReminderId?: string;   // id of the first occurrence in this series
 }
 
+export interface CarePlanItem {
+  id: string;
+  carePlanId: string;
+  farmId: string;
+  title: string;              // max 140 chars
+  reminderType: ReminderType; // reuse existing type
+  dosageOrAction: string;     // max 140 chars
+  notes: string;              // max 500 chars
+  // When to trigger relative to batch placement date
+  offsetDays: number;         // days after placement date for first occurrence (0 = same day)
+  // Recurrence
+  intervalUnit: RecurrenceUnit;
+  intervalValue: number;      // e.g. 2 for "every 2 days"; ignored when intervalUnit='once'
+  sortOrder: number;
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface CarePlan {
+  id: string;
+  farmId: string;
+  name: string;               // max 100 chars
+  description: string;        // max 300 chars
+  planType: 'medication' | 'vaccination' | 'activity';
+  status: 'active' | 'inactive';
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}

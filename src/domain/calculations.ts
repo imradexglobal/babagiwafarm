@@ -1,5 +1,6 @@
 import type {
   DateFilterPreset,
+  DepartmentType,
   EggProductionEntry,
   EggSale,
   FarmMember,
@@ -11,6 +12,7 @@ import type {
   MortalityEntry,
   PermissionsMatrix,
   PoultryBatch,
+  RecurrenceUnit,
   ReminderStatus,
   ReminderType,
 } from '../types/farm.ts';
@@ -21,23 +23,40 @@ export const DEFAULT_TIMEZONE = 'Africa/Lagos';
 
 export const OWNER_FULL_PERMISSIONS: PermissionsMatrix = {
   batches: { read: true, create: true, edit: true, delete: true },
-  production: { read: true, create: true, edit: true, delete: true },
+  production: { read: true, create: true, edit: true, delete: true, approve: true },
   feed: { read: true, create: true, edit: true, delete: true },
   sales: { read: true, create: true, edit: true, delete: true, overridePrice: true },
   reports: { read: true, export: true },
   settings: { read: true, edit: true },
   members: { read: true, manage: true },
+  eggStore: { read: true, transfer: true, receive: true, sort: true, adjust: true, distribute: true, dispose: true },
 };
 
 export const DEFAULT_STAFF_PERMISSIONS: PermissionsMatrix = {
   batches: { read: true, create: false, edit: false, delete: false },
-  production: { read: true, create: true, edit: false, delete: false },
+  production: { read: true, create: true, edit: false, delete: false, approve: false },
   feed: { read: true, create: true, edit: false, delete: false },
   sales: { read: true, create: true, edit: false, delete: false, overridePrice: false },
   reports: { read: true, export: false },
   settings: { read: false, edit: false },
   members: { read: false, manage: false },
+  eggStore: { read: true, transfer: true, receive: true, sort: true, adjust: false, distribute: false, dispose: false },
 };
+
+/** Adds safe defaults for the Egg Store domain when editing pre-upgrade staff records. */
+export function normalizePermissions(permissions: Partial<PermissionsMatrix> | undefined): PermissionsMatrix {
+  const defaults = DEFAULT_STAFF_PERMISSIONS;
+  return {
+    batches: { ...defaults.batches, ...permissions?.batches },
+    production: { ...defaults.production, ...permissions?.production },
+    feed: { ...defaults.feed, ...permissions?.feed },
+    sales: { ...defaults.sales, ...permissions?.sales },
+    reports: { ...defaults.reports, ...permissions?.reports },
+    settings: { ...defaults.settings, ...permissions?.settings },
+    members: { ...defaults.members, ...permissions?.members },
+    eggStore: { ...defaults.eggStore, ...permissions?.eggStore },
+  };
+}
 
 export function hasPermission(
   member: FarmMember | null,
@@ -195,6 +214,7 @@ export interface BatchFinancialSummary {
   pooledSalesRevenueNgn: number;
   totalRevenueNgn: number;
   feedExpenseNgn: number;
+  medicationExpenseNgn: number;
   directOtherExpenseNgn: number;
   totalExpenseNgn: number;
   netProfitNgn: number;
@@ -203,15 +223,15 @@ export interface BatchFinancialSummary {
 
 export function calculateBatchFinancialSummaries(params: {
   batches: Pick<PoultryBatch, 'id'>[];
-  production: Pick<EggProductionEntry, 'batchId' | 'totalEggs' | 'isVoided'>[];
+  production: Pick<EggProductionEntry, 'batchId' | 'totalEggs' | 'isVoided' | 'status'>[];
   consumptions: Pick<FeedConsumption, 'batchId' | 'totalCostNgn' | 'isVoided'>[];
   sales: Pick<EggSale, 'batchId' | 'totalAmountNgn' | 'isVoided'>[];
-  farmPurchases?: Pick<FarmPurchase, 'batchId' | 'totalCostNgn' | 'isVoided'>[];
+  farmPurchases?: Pick<FarmPurchase, 'batchId' | 'totalCostNgn' | 'isVoided' | 'category'>[];
 }): Map<string, BatchFinancialSummary> {
   const eggsByBatch = new Map<string, number>();
   let totalFarmEggs = 0;
   for (const p of params.production) {
-    if (p.isVoided) continue;
+    if (p.isVoided || (p.status !== undefined && p.status !== 'APPROVED')) continue;
     eggsByBatch.set(p.batchId, (eggsByBatch.get(p.batchId) || 0) + p.totalEggs);
     totalFarmEggs += p.totalEggs;
   }
@@ -240,12 +260,12 @@ export function calculateBatchFinancialSummaries(params: {
   }
 
   const otherExpenseByBatch = new Map<string, number>();
+  const medicationExpenseByBatch = new Map<string, number>();
   for (const fp of params.farmPurchases || []) {
     if (fp.isVoided || !fp.batchId) continue;
-    otherExpenseByBatch.set(
-      fp.batchId,
-      (otherExpenseByBatch.get(fp.batchId) || 0) + fp.totalCostNgn
-    );
+    const isMedication = ['medication', 'vaccines_vet', 'supplements'].includes(fp.category);
+    const target = isMedication ? medicationExpenseByBatch : otherExpenseByBatch;
+    target.set(fp.batchId, (target.get(fp.batchId) || 0) + fp.totalCostNgn);
   }
 
   const result = new Map<string, BatchFinancialSummary>();
@@ -262,10 +282,12 @@ export function calculateBatchFinancialSummaries(params: {
 
     const feedExpenseNgn =
       Math.round((feedExpenseByBatch.get(b.id) || 0) * 100) / 100;
+    const medicationExpenseNgn =
+      Math.round((medicationExpenseByBatch.get(b.id) || 0) * 100) / 100;
     const directOtherExpenseNgn =
       Math.round((otherExpenseByBatch.get(b.id) || 0) * 100) / 100;
     const totalExpenseNgn =
-      Math.round((feedExpenseNgn + directOtherExpenseNgn) * 100) / 100;
+      Math.round((feedExpenseNgn + medicationExpenseNgn + directOtherExpenseNgn) * 100) / 100;
 
     const netProfitNgn = Math.round((totalRevenueNgn - totalExpenseNgn) * 100) / 100;
     const profitMarginPct =
@@ -280,6 +302,7 @@ export function calculateBatchFinancialSummaries(params: {
       pooledSalesRevenueNgn,
       totalRevenueNgn,
       feedExpenseNgn,
+      medicationExpenseNgn,
       directOtherExpenseNgn,
       totalExpenseNgn,
       netProfitNgn,
@@ -415,13 +438,36 @@ const MONTH_SHORT_NAMES = [
   'Dec',
 ] as const;
 
-export function formatIsoDateDisplay(isoDate: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return isoDate;
-  const [year, monthStr, day] = isoDate.split('-');
-  const monthIdx = Number(monthStr) - 1;
-  const monthName = MONTH_SHORT_NAMES[monthIdx];
-  if (!monthName) return isoDate;
-  return `${day} ${monthName}, ${year}`;
+export function formatIsoDateDisplay(isoDate: string | Date | null | undefined): string {
+  if (!isoDate) return '';
+  if (isoDate instanceof Date) {
+    if (isNaN(isoDate.getTime())) return '';
+    const day = String(isoDate.getDate()).padStart(2, '0');
+    const monthName = MONTH_SHORT_NAMES[isoDate.getMonth()] || '';
+    const year = isoDate.getFullYear();
+    return `${day} ${monthName}, ${year}`;
+  }
+  const str = String(isoDate).trim();
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const [, year, monthStr, day] = match;
+    const monthIdx = Number(monthStr) - 1;
+    const monthName = MONTH_SHORT_NAMES[monthIdx];
+    if (monthName) {
+      return `${day.padStart(2, '0')} ${monthName}, ${year}`;
+    }
+  }
+  return str;
+}
+
+export function formatEggCountInCrates(eggs: number): string {
+  const safeEggs = Math.max(0, Math.round(Number(eggs) || 0));
+  const crates = Math.floor(safeEggs / EGGS_PER_CRATE);
+  const pieces = safeEggs % EGGS_PER_CRATE;
+  if (crates === 0 && pieces === 0) return '0 Crates';
+  if (pieces === 0) return `${crates.toLocaleString()} Crate${crates === 1 ? '' : 's'}`;
+  if (crates === 0) return `${pieces} pcs`;
+  return `${crates.toLocaleString()} Crate${crates === 1 ? '' : 's'} + ${pieces} pcs`;
 }
 
 export function generateAutoBatchCode(
@@ -550,7 +596,7 @@ export function buildLast7DaysProductionAndFeedTrends(params: {
   todayDateStr: string;
   production: Pick<
     EggProductionEntry,
-    'transactionDate' | 'batchId' | 'intactEggs' | 'crackedEggs' | 'damagedEggs' | 'totalEggs' | 'isVoided'
+    'transactionDate' | 'batchId' | 'intactEggs' | 'crackedEggs' | 'damagedEggs' | 'totalEggs' | 'isVoided' | 'status'
   >[];
   consumptions: Pick<
     FeedConsumption,
@@ -587,7 +633,7 @@ export function buildLast7DaysProductionAndFeedTrends(params: {
   }
 
   for (const p of production) {
-    if (p.isVoided) continue;
+    if (p.isVoided || (p.status !== undefined && p.status !== 'APPROVED')) continue;
     if (scopedBatchId && p.batchId !== scopedBatchId) continue;
     const bucket = byDate.get(p.transactionDate);
     if (!bucket) continue;
@@ -921,3 +967,50 @@ export function buildBatchRemindersTimeline(params: {
 }
 
 
+
+export function hasDepartmentAccess(
+  member: FarmMember | null | undefined,
+  requiredDept: DepartmentType
+): boolean {
+  if (!member) return false;
+  if (member.role === 'owner') return true;
+  if (!member.departments || member.departments.length === 0) return true;
+  return member.departments.includes(requiredDept) || member.departments.includes('general');
+}
+
+export function computeNextDueDate(
+  currentDate: string,
+  intervalUnit: RecurrenceUnit,
+  intervalValue: number = 1
+): string | null {
+  if (intervalUnit === 'once') return null;
+  const [y, m, d] = currentDate.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const safeInterval = Math.max(1, Math.round(intervalValue));
+
+  if (intervalUnit === 'hour') {
+    const daysToAdd = Math.max(1, Math.round(safeInterval / 24));
+    date.setUTCDate(date.getUTCDate() + daysToAdd);
+  } else if (intervalUnit === 'day') {
+    date.setUTCDate(date.getUTCDate() + safeInterval);
+  } else if (intervalUnit === 'week') {
+    date.setUTCDate(date.getUTCDate() + safeInterval * 7);
+  } else if (intervalUnit === 'month') {
+    date.setUTCMonth(date.getUTCMonth() + safeInterval);
+  }
+
+  const nextY = date.getUTCFullYear();
+  const nextM = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const nextD = String(date.getUTCDate()).padStart(2, '0');
+  return `${nextY}-${nextM}-${nextD}`;
+}
+
+export function computeDateWithOffset(baseDate: string, offsetDays: number): string {
+  const [y, m, d] = baseDate.split('-').map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  const nextY = date.getUTCFullYear();
+  const nextM = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const nextD = String(date.getUTCDate()).padStart(2, '0');
+  return `${nextY}-${nextM}-${nextD}`;
+}

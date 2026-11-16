@@ -1,0 +1,6 @@
+const fs=require('fs'); const p='firestore.rules'; let s=fs.readFileSync(p,'utf8').replace(/\r\n/g,'\n');
+const start=s.indexOf('      match /eggProduction/{entryId}'); const end=s.indexOf('        allow delete: if false;', start); if(start<0||end<0) throw new Error('block not found');
+const block=s.slice(start,end); const needle="              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])\n            )";
+if(!block.includes(needle)) throw new Error('void branch not found');
+const add="              && incoming().diff(existing()).affectedKeys().hasOnly(['isVoided', 'voidReason', 'voidedBy', 'updatedBy', 'updatedAt'])\n            ) ||\n            (\n              canApproveProduction(farmId)\n              && existing().status == 'PENDING'\n              && incoming().status == 'APPROVED'\n              && incoming().approvedBy == request.auth.uid\n              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedBy', 'approvedByName', 'approvedAt', 'approvalAuditId', 'updatedBy', 'updatedAt'])\n            )";
+s=s.slice(0,start)+block.replace(needle,add)+s.slice(end); fs.writeFileSync(p,s);

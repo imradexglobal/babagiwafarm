@@ -49,19 +49,22 @@ export const ConfirmVoidModal: React.FC<ConfirmVoidModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-modal-title"
     >
-      <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-t-2xl sm:rounded-xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
+        {/* Mobile Sheet Drag Indicator */}
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300 sm:hidden" />
+
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-700 border border-red-200">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700 border border-red-200">
               <AlertTriangle className="h-5 w-5" />
             </div>
             <div>
-              <h3 id="confirm-modal-title" className="text-lg font-semibold text-slate-900">
+              <h3 id="confirm-modal-title" className="text-base sm:text-lg font-bold text-slate-900">
                 {title}
               </h3>
             </div>
@@ -69,19 +72,19 @@ export const ConfirmVoidModal: React.FC<ConfirmVoidModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-700"
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer"
             aria-label="Close confirmation dialog"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <p className="mt-3 text-sm leading-relaxed text-slate-600">{description}</p>
+        <p className="mt-3 text-xs sm:text-sm leading-relaxed text-slate-600">{description}</p>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {requireReason && (
             <div>
-              <label htmlFor="void-reason" className="block text-sm font-medium text-slate-700">
+              <label htmlFor="void-reason" className="block text-xs sm:text-sm font-medium text-slate-700">
                 Reason for Audit Log <span className="text-red-600">*</span>
               </label>
               <textarea
@@ -90,7 +93,7 @@ export const ConfirmVoidModal: React.FC<ConfirmVoidModalProps> = ({
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder={reasonPlaceholder}
-                className="mt-1.5 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-700/20"
+                className="mt-1.5 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-red-600 focus:outline-none focus:ring-2 focus:ring-red-600/20"
                 required
               />
             </div>
@@ -99,27 +102,27 @@ export const ConfirmVoidModal: React.FC<ConfirmVoidModalProps> = ({
           {error && (
             <div
               role="alert"
-              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800"
+              className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs sm:text-sm text-red-800"
             >
               {error}
             </div>
           )}
 
-          <div className="flex items-center justify-end gap-3 pt-2">
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2.5 sm:gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
               disabled={submitting}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
+              className="w-full sm:w-auto rounded-xl border border-slate-300 px-4 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-100 active:bg-slate-200 disabled:opacity-50 cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={submitting}
-              className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-60 whitespace-nowrap shrink-0"
+              disabled={submitting || (requireReason && reason.trim().length < 3)}
+              className="w-full sm:w-auto rounded-xl bg-red-700 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs hover:bg-red-800 active:bg-red-900 disabled:opacity-50 cursor-pointer"
             >
-              {submitting ? 'Processing...' : confirmLabel}
+              {submitting ? 'Voiding...' : confirmLabel}
             </button>
           </div>
         </form>

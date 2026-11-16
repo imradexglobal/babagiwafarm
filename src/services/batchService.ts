@@ -27,6 +27,7 @@ export async function createBatch(params: {
   maleCount: number;
   femaleCount: number;
   remarks: string;
+  assignedCarePlanIds?: string[];
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -105,6 +106,7 @@ export async function createBatch(params: {
         femaleCount: params.femaleCount,
         remarks: params.remarks.trim().slice(0, 500),
         status: 'active',
+        assignedCarePlanIds: params.assignedCarePlanIds || [],
         createdBy: params.actorUid,
         createdByName: params.actorName.slice(0, 150),
         updatedBy: params.actorUid,

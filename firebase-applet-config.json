@@ -1,12 +1,12 @@
 {
-  "projectId": "empyrean-lens-cvc14",
-  "appId": "1:1056653155237:web:8f9e9b281f9e70373d664c",
-  "apiKey": "AIzaSyCcMzKrAwoqlyHlx6GhVcDgPuylcsXPiME",
-  "authDomain": "empyrean-lens-cvc14.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-babagiwafarmmana-b531c7d2-ec0a-4af3-aba1-301c4bcba45c",
-  "storageBucket": "empyrean-lens-cvc14.firebasestorage.app",
-  "messagingSenderId": "1056653155237",
-  "measurementId": "",
-  "oAuthClientId": "1056653155237-qsoepf0p0731op33ge66neg4kd7vd5g0.apps.googleusercontent.com",
+  "projectId": "babagiwafarm",
+  "appId": "1:972233083143:web:ab832debd8647a13725da2",
+  "apiKey": "AIzaSyAIN6aoR-zdVA8uh-uTxFMTooxVpsiko1Q",
+  "authDomain": "babagiwafarm.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "babagiwafarm.firebasestorage.app",
+  "messagingSenderId": "972233083143",
+  "measurementId": "G-TRDSSEFXCT",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

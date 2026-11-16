@@ -7,15 +7,90 @@
 }
 
 @layer base {
+  :root {
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sal: env(safe-area-inset-left, 0px);
+    --sar: env(safe-area-inset-right, 0px);
+    
+    /* Warm Agricultural Canvas */
+    --agric-bg: #fcfbf7;
+    --agric-surface: #ffffff;
+    --agric-border: #e8e5dc;
+    --agric-dark: #0f3d2e;
+    --agric-forest: #14532d;
+    --agric-harvest: #b45309;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    background-color: var(--agric-bg);
+  }
+
   body {
     font-family: var(--font-sans);
+    min-height: 100vh;
+    min-height: 100dvh;
+    background-color: var(--agric-bg);
+    color: #1c1917;
   }
 
   h1, h2, h3, h4 {
     font-family: var(--font-display);
+    color: #0f3d2e;
+  }
+
+  /* Prevent mobile Chrome and iOS from automatically zooming in on input focus */
+  @media (max-width: 640px) {
+    input:not([type="checkbox"]):not([type="radio"]),
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
   }
 }
 
 .tabular-nums {
   font-variant-numeric: tabular-nums;
+}
+
+/* Hide scrollbars while allowing smooth swipe gestures */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Smooth touch scrolling */
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Agricultural Subtle Patterns & Touches */
+.agric-card {
+  background-color: #ffffff;
+  border: 1px solid #e7e4db;
+  box-shadow: 0 1px 3px 0 rgba(15, 61, 46, 0.04);
+}
+
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  .no-print, nav, aside, header {
+    display: none !important;
+  }
+  #printable-invoice-area {
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
 }

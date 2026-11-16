@@ -6,6 +6,8 @@ import {
   EGGS_PER_CRATE,
   calculateBatchMortalityStats,
   formatDateInTimezone,
+  formatEggCountInCrates,
+  formatIsoDateDisplay,
   formatGramsToKgAndBags,
   formatNgn,
   hasPermission,
@@ -93,7 +95,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     () =>
       canReadProd
         ? rangeProduction.filter(
-            (p) => !p.isVoided && p.transactionDate >= startDate && p.transactionDate <= endDate
+            (p) => !p.isVoided && (p.status === undefined || p.status === 'APPROVED') && p.transactionDate >= startDate && p.transactionDate <= endDate
           )
         : [],
     [rangeProduction, startDate, endDate, canReadProd]
@@ -408,7 +410,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       )}
 
       {/* Primary KPI Strip */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         {/* Production Card */}
         <div className="rounded-xl border border-slate-200 bg-white p-5">
           <div className="flex items-center justify-between">
@@ -420,16 +422,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {canReadProd ? (
             <>
               <p className="mt-2 font-mono text-2xl font-bold text-slate-900 tabular-nums">
-                {prodTotals.totalEggs.toLocaleString()} eggs
+                {formatEggCountInCrates(prodTotals.totalEggs)}
               </p>
               <div className="mt-2 space-y-1 text-xs text-slate-600 tabular-nums">
                 <p>
-                  Intact: {prodTotals.intactEggs.toLocaleString()} ({normalizedIntactCrates} crates +{' '}
-                  {normalizedIntactRemPieces} pcs)
+                  Intact: {formatEggCountInCrates(prodTotals.intactEggs)} ({prodTotals.intactEggs.toLocaleString()} pcs)
                 </p>
                 <p className="text-slate-500">
-                  Cracked: {prodTotals.crackedEggs.toLocaleString()} · Damaged:{' '}
-                  {prodTotals.damagedEggs.toLocaleString()}
+                  Cracked: {formatEggCountInCrates(prodTotals.crackedEggs)} · Damaged: {formatEggCountInCrates(prodTotals.damagedEggs)}
                 </p>
               </div>
             </>
@@ -450,7 +450,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {formatNgn(salesTotals.revenueNgn)}
               </p>
               <div className="mt-2 space-y-1 text-xs text-slate-600 tabular-nums">
-                <p>{salesTotals.eggsEquivalent.toLocaleString()} eggs equivalent sold</p>
+                <p>{formatEggCountInCrates(salesTotals.eggsEquivalent)} ({salesTotals.eggsEquivalent.toLocaleString()} pcs)</p>
                 <p className="text-slate-500">{filteredSales.length} completed sale entries</p>
               </div>
             </>
@@ -534,7 +534,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               No feed items configured yet. Add feed items in Farm Setup to track stock.
             </p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <>
+            <div className="mt-3 hidden sm:block overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
@@ -565,6 +566,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </tbody>
               </table>
             </div>
+            <div className="mt-3 sm:hidden space-y-2">
+              {stockRows.map((row) => (
+                <div key={row.feedItemId} className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50/50 p-3">
+                  <div>
+                    <p className="font-bold text-xs text-slate-900">{row.feedType}</p>
+                    <p className="text-[11px] text-slate-500">{row.brand}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className={`font-mono text-xs font-bold ${row.balanceGrams <= 0 ? 'text-amber-700' : 'text-slate-900'}`}>{row.kgText}</p>
+                    <p className="font-mono text-[11px] text-slate-500">{row.bagsText}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            </>
           )}
         </div>
 
@@ -572,7 +588,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Daily Activity Reconciliation ({startDate} to {endDate})
+                Daily Activity Reconciliation ({formatIsoDateDisplay(startDate)} to {formatIsoDateDisplay(endDate)})
               </h2>
               <p className="text-xs text-slate-500">
                 Aggregated from persisted non-voided transactions
@@ -592,7 +608,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               No transactions recorded inside this date range.
             </p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <>
+            <div className="mt-3 hidden sm:block overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
@@ -607,12 +624,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
                   {dailyReconciliation.slice(0, 14).map((row) => (
                     <tr key={row.date} className="hover:bg-slate-50">
-                      <td className="py-2.5 pr-2 font-medium text-slate-900">{row.date}</td>
+                      <td className="py-2.5 pr-2 font-medium text-slate-900">{formatIsoDateDisplay(row.date)}</td>
                       <td className="py-2.5 text-right text-slate-800">
-                        {row.intactEggs.toLocaleString()}
+                        {formatEggCountInCrates(row.intactEggs)}
                       </td>
                       <td className="py-2.5 text-right text-slate-600">
-                        {row.crackedDamaged.toLocaleString()}
+                        {formatEggCountInCrates(row.crackedDamaged)}
                       </td>
                       <td className="py-2.5 text-right text-slate-800">
                         {(row.feedGrams / 1000).toFixed(2)}
@@ -628,6 +645,35 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </tbody>
               </table>
             </div>
+            <div className="mt-3 sm:hidden space-y-2.5">
+              {dailyReconciliation.slice(0, 10).map((row) => (
+                <div key={row.date} className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 pb-2">
+                    <span className="font-bold text-xs text-slate-900">{formatIsoDateDisplay(row.date)}</span>
+                    <span className="font-mono font-bold text-xs text-emerald-800">{formatNgn(row.salesRevenueNgn)}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Intact Eggs</span>
+                      <span className="font-mono font-semibold text-slate-800">{formatEggCountInCrates(row.intactEggs)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Cracked / Dmg</span>
+                      <span className="font-mono text-slate-700">{formatEggCountInCrates(row.crackedDamaged)}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Feed Issued</span>
+                      <span className="font-mono text-slate-800">{(row.feedGrams / 1000).toFixed(1)} kg</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Feed Cost</span>
+                      <span className="font-mono text-slate-700">{formatNgn(row.feedCostNgn)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            </>
           )}
         </div>
       </div>

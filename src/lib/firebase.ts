@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import {
   doc,
@@ -13,6 +14,10 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import { isOfflineFirestoreError, setServerUnreachable } from './firebaseSync.ts';
 
 const app = initializeApp(firebaseConfig);
+
+export const analyticsReady = isAnalyticsSupported()
+  .then((supported) => (supported ? getAnalytics(app) : null))
+  .catch(() => null);
 
 function createFirestore(): Firestore {
   try {
@@ -92,6 +97,17 @@ export function handleFirestoreError(
 
 export function formatUserFriendlyError(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
+  const authCode = (err as Error & { code?: string }).code || '';
+  const authMessage = err.message.toUpperCase();
+  if (authCode === 'auth/configuration-not-found' || authMessage.includes('CONFIGURATION_NOT_FOUND')) {
+    return 'Google sign-in is not configured in Firebase for project “babagiwafarm”. In Firebase Console, open Authentication → Sign-in method, enable Google, choose a support email, and save. Then open Authentication → Settings → Authorized domains and add localhost and 127.0.0.1 for local testing, plus your deployed app domain.';
+  }
+  if (authCode === 'auth/unauthorized-domain') {
+    return 'This app domain is not authorized for Firebase Authentication. In Firebase Console, open Authentication → Settings → Authorized domains and add the hostname you are using (for example, localhost or 127.0.0.1).';
+  }
+  if (authCode === 'auth/operation-not-allowed') {
+    return 'Google sign-in is disabled for Firebase project “babagiwafarm”. In Firebase Console, open Authentication → Sign-in method, enable Google, choose a support email, and save.';
+  }
   try {
     const parsed = JSON.parse(err.message) as Partial<FirestoreErrorInfo>;
     if (parsed && typeof parsed.error === 'string') {

@@ -5,6 +5,8 @@ import {
   calculateBirdAgeDays,
   formatBirdAge,
   formatDateInTimezone,
+  formatEggCountInCrates,
+  formatIsoDateDisplay,
   hasPermission,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
@@ -388,13 +390,13 @@ export const ProductionView: React.FC<ProductionViewProps> = ({
               <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
                 {dailyTotals.map((d) => (
                   <tr key={d.date}>
-                    <td className="py-2 font-medium text-slate-900">{d.date}</td>
+                    <td className="py-2 font-medium text-slate-900">{formatIsoDateDisplay(d.date)}</td>
                     <td className="py-2 text-right text-slate-600">{d.count}</td>
-                    <td className="py-2 text-right text-emerald-800">{d.intact.toLocaleString()}</td>
-                    <td className="py-2 text-right text-amber-700">{d.cracked.toLocaleString()}</td>
-                    <td className="py-2 text-right text-red-700">{d.damaged.toLocaleString()}</td>
+                    <td className="py-2 text-right text-emerald-800">{formatEggCountInCrates(d.intact)}</td>
+                    <td className="py-2 text-right text-amber-700">{formatEggCountInCrates(d.cracked)}</td>
+                    <td className="py-2 text-right text-red-700">{formatEggCountInCrates(d.damaged)}</td>
                     <td className="py-2 text-right font-semibold text-slate-900">
-                      {d.total.toLocaleString()}
+                      {formatEggCountInCrates(d.total)}
                     </td>
                   </tr>
                 ))}
@@ -434,7 +436,7 @@ export const ProductionView: React.FC<ProductionViewProps> = ({
                   <tr key={e.id} className={e.isVoided ? 'bg-slate-50 text-slate-400' : 'hover:bg-slate-50'}>
                     <td className="px-4 py-3 font-mono">
                       <div className={e.isVoided ? 'line-through' : 'font-medium text-slate-900'}>
-                        {e.transactionDate}
+                        {formatIsoDateDisplay(e.transactionDate)}
                       </div>
                       <div className="text-[11px] text-slate-500">{e.transactionTime || '—'}</div>
                     </td>

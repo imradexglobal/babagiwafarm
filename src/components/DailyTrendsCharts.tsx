@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { area as d3Area, curveMonotoneX, line as d3Line, max as d3Max, scaleBand, scaleLinear } from 'd3';
 import { Plus, TrendingUp } from 'lucide-react';
-import { EGGS_PER_CRATE, formatNgn, type DailyTrendPoint } from '../domain/calculations.ts';
+import { EGGS_PER_CRATE, formatEggCountInCrates, formatNgn, type DailyTrendPoint } from '../domain/calculations.ts';
 
 interface DailyTrendsChartsProps {
   points: DailyTrendPoint[];

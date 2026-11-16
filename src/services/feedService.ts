@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   limit,
   onSnapshot,
@@ -251,15 +252,46 @@ export async function createFeedConsumption(params: {
     handleFirestoreError(err, OperationType.LIST, `farms/${params.farmId}/feedPurchases`);
   }
 
-  const costSource = findQualifyingPurchaseForConsumption(
+  const stockRef = doc(db, 'farms', params.farmId, 'feedStock', params.feedItem.id);
+  let costSource = findQualifyingPurchaseForConsumption(
     purchases,
     params.feedItem.id,
     params.transactionDate
   );
 
+
+  if (!costSource) {
+    try {
+      const stockSnap = await getDoc(stockRef);
+      if (stockSnap.exists() && (stockSnap.data() as FeedStock).lastUnitCostPerGramNgn > 0) {
+        const stock = stockSnap.data() as FeedStock;
+        costSource = {
+          purchaseId: '',
+          purchaseDate: stock.lastPurchaseDate || params.transactionDate,
+          unitCostPerGramNgn: stock.lastUnitCostPerGramNgn,
+        };
+      }
+    } catch {
+      // Continue to fallback
+    }
+  }
+
+  if (!costSource) {
+    const anyPurchase = purchases
+      .filter((p) => !p.isVoided && p.feedItemId === params.feedItem.id && p.unitCostPerGramNgn > 0)
+      .sort((a, b) => b.transactionDate.localeCompare(a.transactionDate))[0];
+    if (anyPurchase) {
+      costSource = {
+        purchaseId: anyPurchase.id,
+        purchaseDate: anyPurchase.transactionDate,
+        unitCostPerGramNgn: anyPurchase.unitCostPerGramNgn,
+      };
+    }
+  }
+
   if (!costSource) {
     throw new Error(
-      `No qualifying purchase found for "${params.feedItem.feedType} (${params.feedItem.brand})" on or before ${params.transactionDate}. Record a purchase on or before this date first.`
+      `No cost data found for "${params.feedItem.feedType} (${params.feedItem.brand})". Record at least one feed purchase with a unit price first.`
     );
   }
 
@@ -267,7 +299,6 @@ export async function createFeedConsumption(params: {
 
   const id = generateId('cons');
   const consRef = doc(db, 'farms', params.farmId, 'feedConsumption', id);
-  const stockRef = doc(db, 'farms', params.farmId, 'feedStock', params.feedItem.id);
 
   try {
     await runTransaction(db, async (tx) => {

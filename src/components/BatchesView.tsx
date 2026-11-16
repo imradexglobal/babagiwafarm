@@ -6,6 +6,7 @@ import {
   calculateBirdAgeDays,
   formatBirdAge,
   formatDateInTimezone,
+  formatEggCountInCrates,
   formatIsoDateDisplay,
   formatNgn,
   generateAutoBatchCode,
@@ -13,7 +14,10 @@ import {
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
 import { createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
+import { getCarePlanItemsForPlans } from '../services/carePlanService.ts';
+import { materializeCarePlanReminders } from '../services/remindersService.ts';
 import type {
+  CarePlan,
   EggProductionEntry,
   EggSale,
   Farm,
@@ -87,6 +91,7 @@ interface BatchesViewProps {
   sales: EggSale[];
   farmPurchases: FarmPurchase[];
   mortalityEntries: MortalityEntry[];
+  carePlans?: CarePlan[];
   onOpenMortality: (batchId?: string, openModal?: boolean) => void;
 }
 
@@ -100,6 +105,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   sales,
   farmPurchases,
   mortalityEntries,
+  carePlans = [],
   onOpenMortality,
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
@@ -136,6 +142,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const [femaleCount, setFemaleCount] = useState('');
   const [remarks, setRemarks] = useState('');
   const [status, setStatus] = useState<'active' | 'inactive'>('active');
+  const [selectedPlanIds, setSelectedPlanIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -187,6 +194,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
     setFemaleCount('');
     setRemarks('');
     setStatus('active');
+    setSelectedPlanIds([]);
     setFormError(null);
     setModalOpen(true);
   };
@@ -217,6 +225,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
     setFemaleCount(String(b.femaleCount));
     setRemarks(b.remarks);
     setStatus(b.status);
+    setSelectedPlanIds(b.assignedCarePlanIds || []);
     setFormError(null);
     setModalOpen(true);
   };
@@ -292,7 +301,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
         });
         setFeedback({ type: 'success', text: `Batch "${editingBatch.batchCode}" updated.` });
       } else {
-        await createBatch({
+        const newBatchId = await createBatch({
           farmId: farm.farmId,
           batchCode,
           penId,
@@ -307,10 +316,63 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
           maleCount: maleNum,
           femaleCount: femaleNum,
           remarks,
+          assignedCarePlanIds: selectedPlanIds,
           actorUid: member.uid,
           actorName: member.displayName,
         });
-        setFeedback({ type: 'success', text: `Batch "${batchCode.trim()}" created and placed.` });
+
+        // Automatically materialize care plan task reminders if plans were selected
+        let scheduledCount = 0;
+        if (selectedPlanIds.length > 0) {
+          try {
+            const items = await getCarePlanItemsForPlans(farm.farmId, selectedPlanIds);
+            if (items.length > 0) {
+              const selectedPlans = carePlans.filter((p) => selectedPlanIds.includes(p.id));
+              const targetPen = pens.find((p) => p.id === penId);
+              const batchSnapshot: PoultryBatch = {
+                id: newBatchId,
+                farmId: farm.farmId,
+                batchCode: batchCode.trim(),
+                penId,
+                penNameSnapshot: targetPen?.name || '',
+                birdType: resolvedBirdType,
+                breed: resolvedBreed,
+                strain: resolvedStrain,
+                source,
+                hatchDate: ageMode === 'hatch' ? hatchDate : '',
+                ageAtPlacementDays: ageDays,
+                placementDate,
+                initialCount: initNum,
+                maleCount: maleNum,
+                femaleCount: femaleNum,
+                remarks,
+                status: 'active',
+                assignedCarePlanIds: selectedPlanIds,
+                createdBy: member.uid,
+                createdByName: member.displayName,
+                updatedBy: member.uid,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              };
+              scheduledCount = await materializeCarePlanReminders({
+                farmId: farm.farmId,
+                batch: batchSnapshot,
+                carePlans: selectedPlans,
+                carePlanItems: items,
+                actorUid: member.uid,
+                actorName: member.displayName,
+                timeZone: farm.timezone,
+              });
+            }
+          } catch (schedErr) {
+            console.error('Failed to materialize care plan reminders:', schedErr);
+          }
+        }
+
+        const successMessage = scheduledCount > 0
+          ? `Batch "${batchCode.trim()}" placed with ${scheduledCount} care plan task(s) scheduled.`
+          : `Batch "${batchCode.trim()}" created and placed.`;
+        setFeedback({ type: 'success', text: successMessage });
       }
       setModalOpen(false);
     } catch (err) {
@@ -323,7 +385,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const batchMetrics = useMemo(() => {
     const map = new Map<string, { eggs: number; feedKg: number }>();
     for (const p of production) {
-      if (p.isVoided) continue;
+      if (p.isVoided || (p.status !== undefined && p.status !== 'APPROVED')) continue;
       const cur = map.get(p.batchId) || { eggs: 0, feedKg: 0 };
       cur.eggs += p.totalEggs;
       map.set(p.batchId, cur);
@@ -360,6 +422,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const filteredFinancialTotals = useMemo(() => {
     let revenue = 0;
     let feedExpense = 0;
+    let medicationExpense = 0;
     let otherDirectExpense = 0;
     let netProfit = 0;
     for (const b of filteredBatches) {
@@ -367,11 +430,12 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
       if (!f) continue;
       revenue += f.totalRevenueNgn;
       feedExpense += f.feedExpenseNgn;
+      medicationExpense += f.medicationExpenseNgn;
       otherDirectExpense += f.directOtherExpenseNgn;
       netProfit += f.netProfitNgn;
     }
     const marginPct = revenue > 0 ? Math.round((netProfit / revenue) * 10000) / 100 : 0;
-    return { revenue, feedExpense, otherDirectExpense, netProfit, marginPct };
+    return { revenue, feedExpense, medicationExpense, otherDirectExpense, netProfit, marginPct };
   }, [filteredBatches, financialsMap]);
 
   return (
@@ -461,7 +525,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
       {/* Batch Financials Summary Strip */}
       {filteredBatches.length > 0 && (
         <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-4">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 tabular-nums">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 tabular-nums">
             <div>
               <p className="text-xs text-slate-500">Egg Sales Revenue (Filtered)</p>
               <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
@@ -475,7 +539,13 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
               </p>
             </div>
             <div>
-              <p className="text-xs text-slate-500">Direct Batch Purchases</p>
+              <p className="text-xs text-slate-500">Medication &amp; Vaccines</p>
+              <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
+                {formatNgn(filteredFinancialTotals.medicationExpense)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-slate-500">Other Batch Purchases</p>
               <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
                 {formatNgn(filteredFinancialTotals.otherDirectExpense)}
               </p>
@@ -495,7 +565,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
             </div>
           </div>
           <p className="text-[11px] text-slate-500">
-            Revenue combines direct batch-tagged egg sales plus pooled farm sales allocated by each batch&apos;s share of eggs produced. Expenses include locked feed consumption costs and batch-attributed purchases.
+            Revenue combines direct batch-tagged egg sales plus pooled farm sales allocated by each batch&apos;s share of eggs produced. Costs show feed, batch-tagged medication/vaccination/supplement purchases, and other direct purchases separately; unassigned purchases are excluded.
           </p>
         </div>
       )}
@@ -510,8 +580,165 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <>
+            {/* Mobile Card Stack */}
+            <div className="lg:hidden divide-y divide-slate-100 p-3 space-y-3">
+              {filteredBatches.map((b) => {
+                let ageTodayText = '—';
+                try {
+                  if (todayStr >= b.placementDate) {
+                    const days = calculateBirdAgeDays({
+                      hatchDate: b.hatchDate,
+                      placementDate: b.placementDate,
+                      ageAtPlacementDays: b.ageAtPlacementDays,
+                      transactionDate: todayStr,
+                    });
+                    ageTodayText = formatBirdAge(days);
+                  } else {
+                    ageTodayText = 'Pre-placement';
+                  }
+                } catch {
+                  ageTodayText = 'Check dates';
+                }
+                const metrics = batchMetrics.get(b.id) || { eggs: 0, feedKg: 0 };
+                const mStats = mortalityStatsMap.get(b.id) || {
+                  initialCount: b.initialCount,
+                  totalLosses: 0,
+                  survivingBirds: b.initialCount,
+                  mortalityRatePct: 0,
+                  survivalRatePct: 100,
+                  entryCount: 0,
+                };
+                const fin = financialsMap.get(b.id) || {
+                  batchId: b.id,
+                  eggsProduced: metrics.eggs,
+                  directSalesRevenueNgn: 0,
+                  pooledSalesRevenueNgn: 0,
+                  totalRevenueNgn: 0,
+                  feedExpenseNgn: 0,
+                  medicationExpenseNgn: 0,
+                  directOtherExpenseNgn: 0,
+                  totalExpenseNgn: 0,
+                  netProfitNgn: 0,
+                  profitMarginPct: 0,
+                };
+
+                return (
+                  <div key={b.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-bold text-slate-900">{b.batchCode}</span>
+                          <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                            {b.penNameSnapshot}
+                          </span>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          {b.birdType} · {b.breed || '—'}{b.strain && b.strain !== b.breed ? ` (${b.strain})` : ''}
+                        </div>
+                      </div>
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          b.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {b.status === 'active' ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 rounded-lg p-2.5">
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Age Today</span>
+                        <span className="font-semibold text-slate-800">{ageTodayText}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Placed</span>
+                        <span className="font-semibold text-slate-800 font-mono">{formatIsoDateDisplay(b.placementDate)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Surviving Birds</span>
+                        <span className="font-semibold text-slate-900 font-mono">
+                          {mStats.survivingBirds.toLocaleString()}{' '}
+                          <span className="font-normal text-slate-500">/ {mStats.initialCount.toLocaleString()}</span>
+                        </span>
+                        <span className="block text-[10px] text-emerald-800 font-medium font-mono">
+                          {mStats.survivalRatePct.toFixed(1)}% survival ({mStats.totalLosses} lost)
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[11px]">Eggs Produced</span>
+                        <span className="font-semibold text-slate-900 font-mono">
+                          {formatEggCountInCrates(metrics.eggs)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 border-t border-slate-100 pt-2 text-xs">
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Revenue</span>
+                        <span className="font-bold text-slate-900 font-mono">{formatNgn(fin.totalRevenueNgn)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Costs</span>
+                        <span className="font-semibold text-slate-700 font-mono">{formatNgn(fin.totalExpenseNgn)}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Net Profit</span>
+                        <span className={`font-bold font-mono ${fin.netProfitNgn >= 0 ? 'text-emerald-800' : 'text-red-700'}`}>
+                          {formatNgn(fin.netProfitNgn)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => onOpenMortality(b.id, canLogMortality && b.status === 'active')}
+                        className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
+                      >
+                        <HeartPulse className="h-3.5 w-3.5" />
+                        <span>Mortality</span>
+                      </button>
+
+                      <div className="flex items-center gap-2">
+                        {canEdit && (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(b)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <Edit2 className="h-3.5 w-3.5" />
+                            <span>Edit</span>
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => setDeactivateTarget(b)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                          >
+                            {b.status === 'active' ? (
+                              <>
+                                <PowerOff className="h-3.5 w-3.5 text-amber-600" />
+                                <span>Deactivate</span>
+                              </>
+                            ) : (
+                              <>
+                                <RotateCcw className="h-3.5 w-3.5 text-emerald-800" />
+                                <span>Reactivate</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Desktop Table */}
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
                   <th className="px-4 py-3 font-medium">Batch Code</th>
@@ -523,7 +750,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                   <th className="px-4 py-3 text-right font-medium">Survival / Loss %</th>
                   <th className="px-4 py-3 text-right font-medium">Eggs Logged</th>
                   <th className="px-4 py-3 text-right font-medium">Revenue (Eggs)</th>
-                  <th className="px-4 py-3 text-right font-medium">Expenses (Feed + Direct)</th>
+                  <th className="px-4 py-3 text-right font-medium">Costs (Feed + Medication + Other)</th>
                   <th className="px-4 py-3 text-right font-medium">Net Profit / Margin</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -563,6 +790,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                     pooledSalesRevenueNgn: 0,
                     totalRevenueNgn: 0,
                     feedExpenseNgn: 0,
+                    medicationExpenseNgn: 0,
                     directOtherExpenseNgn: 0,
                     totalExpenseNgn: 0,
                     netProfitNgn: 0,
@@ -605,7 +833,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-slate-700">
-                        {metrics.eggs.toLocaleString()}
+                        {formatEggCountInCrates(metrics.eggs)}
                       </td>
                       <td className="px-4 py-3 text-right font-mono">
                         <div className="font-semibold text-slate-900">
@@ -626,10 +854,10 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                           {formatNgn(fin.totalExpenseNgn)}
                         </div>
                         <div className="text-[11px] text-slate-500">
-                          {metrics.feedKg.toFixed(1)} kg feed
-                          {fin.directOtherExpenseNgn > 0
-                            ? ` + ${formatNgn(fin.directOtherExpenseNgn)}`
-                            : ''}
+                          Feed {formatNgn(fin.feedExpenseNgn)} · {metrics.feedKg.toFixed(1)} kg
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Medication {formatNgn(fin.medicationExpenseNgn)} · Other {formatNgn(fin.directOtherExpenseNgn)}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-right font-mono">
@@ -700,17 +928,19 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
 
       {/* Create / Edit Batch Modal */}
       {modalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/50 p-0 sm:p-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+          <div className="max-h-[90vh] sm:max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-t-2xl sm:rounded-xl border border-slate-200 bg-white p-5 sm:p-6 shadow-xl pb-[calc(1.25rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-slate-300 sm:hidden" />
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <h2 className="text-lg font-bold text-slate-900">
                 {editingBatch ? `Edit Batch: ${editingBatch.batchCode}` : 'Place New Poultry Batch'}
@@ -1054,6 +1284,64 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                     <option value="active">Active (Selectable for daily entries)</option>
                     <option value="inactive">Inactive (Archived; releases pen)</option>
                   </select>
+                </div>
+              )}
+
+              {!editingBatch && (
+                <div className="space-y-2 rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3.5">
+                  <div>
+                    <span className="block text-xs font-bold text-emerald-950">
+                      Assign Schedule / Care Plans
+                    </span>
+                    <p className="text-[11px] text-emerald-800">
+                      Ready-made vaccination, medication, and check tasks will be automatically scheduled for this flock.
+                    </p>
+                  </div>
+                  {carePlans.filter((p) => p.status === 'active').length === 0 ? (
+                    <p className="text-xs text-slate-500 italic py-1">
+                      No active care plans created yet. You can build ready-made schedules in Farm Setup &rarr; Care Plan Schedules.
+                    </p>
+                  ) : (
+                    <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {carePlans
+                        .filter((p) => p.status === 'active')
+                        .map((plan) => {
+                          const checked = selectedPlanIds.includes(plan.id);
+                          return (
+                            <label
+                              key={plan.id}
+                              className={`flex items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-colors cursor-pointer ${
+                                checked
+                                  ? 'border-emerald-600 bg-white ring-1 ring-emerald-600'
+                                  : 'border-slate-200 bg-white hover:bg-slate-50'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSelectedPlanIds((prev) =>
+                                    checked ? prev.filter((id) => id !== plan.id) : [...prev, plan.id]
+                                  );
+                                }}
+                                className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-semibold text-slate-900 truncate">{plan.name}</span>
+                                  <span className="inline-block rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-emerald-800 shrink-0">
+                                    {plan.planType}
+                                  </span>
+                                </div>
+                                {plan.description && (
+                                  <p className="mt-0.5 text-[10px] text-slate-500 line-clamp-1">{plan.description}</p>
+                                )}
+                              </div>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
               )}
 

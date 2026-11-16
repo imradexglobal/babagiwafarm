@@ -10,13 +10,20 @@ import {
 } from 'firebase/firestore';
 import {
   calculateBirdAgeDays,
+  computeDateWithOffset,
+  computeNextDueDate,
   formatDateInTimezone,
   generateId,
 } from '../domain/calculations.ts';
+
+export { computeDateWithOffset, computeNextDueDate };
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type {
+  CarePlan,
+  CarePlanItem,
   FarmReminder,
   PoultryBatch,
+  RecurrenceUnit,
   ReminderStatus,
   ReminderType,
 } from '../types/farm.ts';
@@ -65,6 +72,7 @@ function computeOptionalTargetAgeDays(
   }
 }
 
+
 export async function createFarmReminder(params: {
   farmId: string;
   batch: PoultryBatch;
@@ -78,6 +86,12 @@ export async function createFarmReminder(params: {
   initialStatus?: ReminderStatus;
   completedAtDate?: string;
   timeZone?: string;
+  carePlanId?: string;
+  carePlanItemId?: string;
+  intervalUnit?: RecurrenceUnit;
+  intervalValue?: number;
+  occurrenceIndex?: number;
+  parentReminderId?: string;
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -134,6 +148,12 @@ export async function createFarmReminder(params: {
     completedAtDate: resolvedDoneDate,
     completedBy: isDone ? params.actorUid : '',
     completedByName: isDone ? params.actorName.slice(0, 150) : '',
+    carePlanId: params.carePlanId || '',
+    carePlanItemId: params.carePlanItemId || '',
+    intervalUnit: params.intervalUnit || 'once',
+    intervalValue: params.intervalValue || 1,
+    occurrenceIndex: params.occurrenceIndex ?? 0,
+    parentReminderId: params.parentReminderId || id,
     createdBy: params.actorUid,
     createdByName: params.actorName.slice(0, 150),
     updatedBy: params.actorUid,
@@ -173,7 +193,7 @@ export async function createFarmReminder(params: {
 
 export async function updateFarmReminderStatus(params: {
   farmId: string;
-  reminder: Pick<FarmReminder, 'id' | 'title' | 'batchCodeSnapshot' | 'status'>;
+  reminder: Partial<FarmReminder> & Pick<FarmReminder, 'id' | 'title' | 'batchCodeSnapshot' | 'status'>;
   nextStatus: ReminderStatus;
   completedAtDate?: string;
   timeZone?: string;
@@ -200,6 +220,57 @@ export async function updateFarmReminderStatus(params: {
     updatedBy: params.actorUid,
     updatedAt: serverTimestamp(),
   });
+
+  // Auto-schedule next occurrence if completing a recurring reminder
+  if (
+    params.nextStatus === 'completed' &&
+    params.reminder.intervalUnit &&
+    params.reminder.intervalUnit !== 'once' &&
+    params.reminder.batchId &&
+    params.reminder.penId
+  ) {
+    const nextDueDate = computeNextDueDate(
+      params.reminder.dueDate || resolvedDoneDate,
+      params.reminder.intervalUnit,
+      params.reminder.intervalValue || 1
+    );
+    if (nextDueDate) {
+      const nextId = generateId('rem');
+      const nextIndex = (params.reminder.occurrenceIndex ?? 0) + 1;
+      const parentId = params.reminder.parentReminderId || params.reminder.id;
+
+      batchWrite.set(doc(db, 'farms', params.farmId, 'farmReminders', nextId), {
+        id: nextId,
+        farmId: params.farmId,
+        batchId: params.reminder.batchId,
+        batchCodeSnapshot: params.reminder.batchCodeSnapshot || '',
+        penId: params.reminder.penId,
+        penNameSnapshot: params.reminder.penNameSnapshot || '',
+        milestoneKey: params.reminder.milestoneKey || '',
+        reminderType: params.reminder.reminderType || 'medication',
+        title: params.reminder.title,
+        dueDate: nextDueDate,
+        targetAgeDays: null,
+        dosageOrAction: params.reminder.dosageOrAction || '',
+        notes: params.reminder.notes || '',
+        status: 'pending',
+        completedAtDate: '',
+        completedBy: '',
+        completedByName: '',
+        carePlanId: params.reminder.carePlanId || '',
+        carePlanItemId: params.reminder.carePlanItemId || '',
+        intervalUnit: params.reminder.intervalUnit,
+        intervalValue: params.reminder.intervalValue || 1,
+        occurrenceIndex: nextIndex,
+        parentReminderId: parentId,
+        createdBy: params.actorUid,
+        createdByName: params.actorName.slice(0, 150),
+        updatedBy: params.actorUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  }
 
   const audit = buildAuditLogEntry({
     farmId: params.farmId,
@@ -321,4 +392,84 @@ export function subscribeFarmReminders(
       }
     }
   );
+}
+
+export async function materializeCarePlanReminders(params: {
+  farmId: string;
+  batch: PoultryBatch;
+  carePlans: CarePlan[];
+  carePlanItems: CarePlanItem[];
+  actorUid: string;
+  actorName: string;
+  timeZone?: string;
+}): Promise<number> {
+  const planById = new Map(params.carePlans.map((p) => [p.id, p]));
+  const eligibleItems = params.carePlanItems.filter((item) => {
+    const plan = planById.get(item.carePlanId);
+    return plan && plan.status === 'active';
+  });
+
+  if (eligibleItems.length === 0) return 0;
+
+  const baseDate = params.batch.placementDate || formatDateInTimezone(new Date(), params.timeZone);
+  const batchWrite = writeBatch(db);
+  let count = 0;
+
+  for (const item of eligibleItems) {
+    const id = generateId('rem');
+    const firstDueDate = computeDateWithOffset(baseDate, item.offsetDays);
+    const targetAgeDays = computeOptionalTargetAgeDays(params.batch, firstDueDate);
+
+    batchWrite.set(doc(db, 'farms', params.farmId, 'farmReminders', id), {
+      id,
+      farmId: params.farmId,
+      batchId: params.batch.id,
+      batchCodeSnapshot: params.batch.batchCode.slice(0, 60),
+      penId: params.batch.penId,
+      penNameSnapshot: params.batch.penNameSnapshot.slice(0, 80),
+      milestoneKey: '',
+      reminderType: item.reminderType,
+      title: item.title,
+      dueDate: firstDueDate,
+      targetAgeDays,
+      dosageOrAction: item.dosageOrAction || '',
+      notes: item.notes || '',
+      status: 'pending',
+      completedAtDate: '',
+      completedBy: '',
+      completedByName: '',
+      carePlanId: item.carePlanId,
+      carePlanItemId: item.id,
+      intervalUnit: item.intervalUnit,
+      intervalValue: item.intervalValue || 1,
+      occurrenceIndex: 0,
+      parentReminderId: id,
+      createdBy: params.actorUid,
+      createdByName: params.actorName.slice(0, 150),
+      updatedBy: params.actorUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    count++;
+  }
+
+  const audit = buildAuditLogEntry({
+    farmId: params.farmId,
+    entityType: 'batch',
+    entityId: params.batch.id,
+    action: 'update',
+    summary: `Materialized ${count} scheduled care plan task(s) for batch ${params.batch.batchCode}`,
+    after: { carePlanRemindersCount: count },
+    actorUid: params.actorUid,
+    actorName: params.actorName,
+  });
+  batchWrite.set(audit.ref, audit.data);
+
+  try {
+    await batchWrite.commit();
+    return count;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/farmReminders`);
+    return 0;
+  }
 }

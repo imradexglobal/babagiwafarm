@@ -649,3 +649,94 @@ test('buildBatchRemindersTimeline computes standard poultry milestones, skips pr
 
 
 
+
+
+test('pending production is excluded from operational financial and trend calculations', async () => {
+  const { calculateBatchFinancialSummaries, buildLast7DaysProductionAndFeedTrends } = await import('../src/domain/calculations.ts');
+  const production = [
+    { batchId: 'b1', totalEggs: 600, isVoided: false, status: 'APPROVED' },
+    { batchId: 'b1', totalEggs: 400, isVoided: false, status: 'PENDING' },
+  ] as any;
+  const summaries = calculateBatchFinancialSummaries({ batches: [{ id: 'b1' }], production, consumptions: [], sales: [] });
+  assert.equal(summaries.get('b1')?.eggsProduced, 600);
+  const trends = buildLast7DaysProductionAndFeedTrends({
+    todayDateStr: '2026-11-15',
+    production: [
+      { transactionDate: '2026-11-15', batchId: 'b1', intactEggs: 600, crackedEggs: 0, damagedEggs: 0, totalEggs: 600, isVoided: false, status: 'APPROVED' },
+      { transactionDate: '2026-11-15', batchId: 'b1', intactEggs: 400, crackedEggs: 0, damagedEggs: 0, totalEggs: 400, isVoided: false, status: 'PENDING' },
+    ] as any,
+    consumptions: [],
+  });
+  assert.equal(trends[6].totalEggs, 600);
+});
+
+test('approval is a distinct production capability for staff while owners remain unrestricted', () => {
+  const staff: FarmMember = {
+    uid: 'u_staff', farmId: 'f1', email: 'staff@example.com', displayName: 'Staff', jobTitle: 'Manager', role: 'staff', status: 'active',
+    permissions: DEFAULT_STAFF_PERMISSIONS, createdBy: 'u_owner', createdAt: null, updatedAt: null,
+  };
+  assert.equal(hasPermission(staff, 'production', 'approve'), false);
+  assert.equal(hasPermission({ ...staff, permissions: { ...DEFAULT_STAFF_PERMISSIONS, production: { ...DEFAULT_STAFF_PERMISSIONS.production, approve: true } } }, 'production', 'approve'), true);
+  assert.equal(hasPermission({ ...staff, role: 'owner' }, 'production', 'approve'), true);
+});
+
+test('hasDepartmentAccess correctly enforces department module access', async () => {
+  const { hasDepartmentAccess } = await import('../src/domain/calculations.ts');
+  const owner: FarmMember = {
+    uid: 'u1', farmId: 'f1', email: 'owner@example.com', displayName: 'Owner', jobTitle: 'Owner', role: 'owner', status: 'active',
+    permissions: OWNER_FULL_PERMISSIONS, createdBy: 'self', createdAt: null, updatedAt: null,
+  };
+  assert.equal(hasDepartmentAccess(owner, 'poultry'), true);
+  assert.equal(hasDepartmentAccess(owner, 'fishery'), true);
+  assert.equal(hasDepartmentAccess(owner, 'crops'), true);
+
+  const poultryStaff: FarmMember = {
+    uid: 'u2', farmId: 'f1', email: 'staff@example.com', displayName: 'Staff', jobTitle: 'Attendant', role: 'staff', status: 'active',
+    departments: ['poultry'],
+    permissions: DEFAULT_STAFF_PERMISSIONS, createdBy: 'u1', createdAt: null, updatedAt: null,
+  };
+  assert.equal(hasDepartmentAccess(poultryStaff, 'poultry'), true);
+  assert.equal(hasDepartmentAccess(poultryStaff, 'fishery'), false);
+
+  const multiStaff: FarmMember = {
+    uid: 'u3', farmId: 'f1', email: 'multi@example.com', displayName: 'Multi', jobTitle: 'Supervisor', role: 'staff', status: 'active',
+    departments: ['poultry', 'fishery', 'crops'],
+    permissions: DEFAULT_STAFF_PERMISSIONS, createdBy: 'u1', createdAt: null, updatedAt: null,
+  };
+  assert.equal(hasDepartmentAccess(multiStaff, 'poultry'), true);
+  assert.equal(hasDepartmentAccess(multiStaff, 'fishery'), true);
+  assert.equal(hasDepartmentAccess(multiStaff, 'crops'), true);
+  assert.equal(hasDepartmentAccess(multiStaff, 'livestock'), false);
+
+  const generalStaff: FarmMember = {
+    uid: 'u4', farmId: 'f1', email: 'gen@example.com', displayName: 'General', jobTitle: 'Admin', role: 'staff', status: 'active',
+    departments: ['general'],
+    permissions: DEFAULT_STAFF_PERMISSIONS, createdBy: 'u1', createdAt: null, updatedAt: null,
+  };
+  assert.equal(hasDepartmentAccess(generalStaff, 'poultry'), true);
+  assert.equal(hasDepartmentAccess(generalStaff, 'fishery'), true);
+});
+
+test('computeNextDueDate and computeDateWithOffset handle intervals accurately', async () => {
+  const { computeNextDueDate, computeDateWithOffset } = await import('../src/domain/calculations.ts');
+  
+  // Day offset
+  assert.equal(computeDateWithOffset('2026-06-01', 0), '2026-06-01');
+  assert.equal(computeDateWithOffset('2026-06-01', 7), '2026-06-08');
+  assert.equal(computeDateWithOffset('2026-06-25', 10), '2026-07-05');
+
+  // Once gives null
+  assert.equal(computeNextDueDate('2026-06-01', 'once', 1), null);
+
+  // Daily interval
+  assert.equal(computeNextDueDate('2026-06-01', 'day', 1), '2026-06-02');
+  assert.equal(computeNextDueDate('2026-06-01', 'day', 3), '2026-06-04');
+
+  // Weekly interval
+  assert.equal(computeNextDueDate('2026-06-01', 'week', 1), '2026-06-08');
+  assert.equal(computeNextDueDate('2026-06-01', 'week', 2), '2026-06-15');
+
+  // Monthly interval
+  assert.equal(computeNextDueDate('2026-06-15', 'month', 1), '2026-07-15');
+  assert.equal(computeNextDueDate('2026-06-15', 'month', 2), '2026-08-15');
+});

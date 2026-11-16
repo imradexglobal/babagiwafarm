@@ -6,6 +6,8 @@ import {
   calculateBatchMortalityStats,
   downloadCsv,
   formatDateInTimezone,
+  formatEggCountInCrates,
+  formatIsoDateDisplay,
   formatGramsToKgAndBags,
   formatNgn,
   hasPermission,
@@ -611,7 +613,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       </div>
 
       {/* Report Tabs */}
-      <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 w-fit">
+      <div className="flex items-center gap-1 overflow-x-auto no-scrollbar rounded-lg border border-slate-200 bg-white p-1.5 w-full sm:w-fit">
         {[
           { id: 'production', label: 'Daily Production & Health', visible: canReadProd },
           { id: 'feed', label: 'Feed & Stock Report', visible: canReadFeed },
@@ -641,7 +643,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       {reportTab !== 'audit' && (
         <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1">
               {DATE_FILTER_PRESETS.map((tab) => (
                 <button
                   key={tab.id}
@@ -852,7 +854,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 No daily production, feed, medication, mortality, or environment entries in selected range.
               </p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -870,10 +872,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
                     {dailyAggregates.map((row) => (
                       <tr key={row.date} className="hover:bg-slate-50">
-                        <td className="py-2.5 pr-2 font-semibold text-slate-900">{row.date}</td>
+                        <td className="py-2.5 pr-2 font-semibold text-slate-900">{formatIsoDateDisplay(row.date)}</td>
                         <td className="py-2.5 text-right text-slate-600">{row.eggPickups}</td>
                         <td className="py-2.5 text-right font-semibold text-emerald-800">
-                          {row.totalEggs.toLocaleString()}
+                          {formatEggCountInCrates(row.totalEggs)}
                         </td>
                         <td className="py-2.5 text-right text-slate-800">{row.feedKg.toFixed(2)}</td>
                         <td className="py-2.5 text-right text-red-700">
@@ -908,7 +910,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             {prodByBatch.length === 0 ? (
               <p className="py-4 text-xs text-slate-500">No production records in selected range.</p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -929,16 +931,16 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         </td>
                         <td className="py-2.5 text-right">{row.entries}</td>
                         <td className="py-2.5 text-right text-emerald-800">
-                          {row.intact.toLocaleString()}
+                          {formatEggCountInCrates(row.intact)}
                         </td>
                         <td className="py-2.5 text-right text-amber-700">
-                          {row.cracked.toLocaleString()}
+                          {formatEggCountInCrates(row.cracked)}
                         </td>
                         <td className="py-2.5 text-right text-red-700">
-                          {row.damaged.toLocaleString()}
+                          {formatEggCountInCrates(row.damaged)}
                         </td>
                         <td className="py-2.5 text-right font-semibold text-slate-900">
-                          {row.total.toLocaleString()}
+                          {formatEggCountInCrates(row.total)}
                         </td>
                       </tr>
                     ))}
@@ -953,7 +955,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <h2 className="text-sm font-semibold text-slate-900">
                 Medication &amp; Vaccination Logs ({filteredMedications.length})
               </h2>
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -968,7 +970,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                     {filteredMedications.map((m) => (
                       <tr key={m.id}>
                         <td className="py-2 font-mono text-slate-700">
-                          {m.transactionDate} ({m.timeOfDay})
+                          {formatIsoDateDisplay(m.transactionDate)} ({m.timeOfDay})
                         </td>
                         <td className="py-2 font-mono text-slate-900">{m.batchCodeSnapshot}</td>
                         <td className="py-2">
@@ -1040,7 +1042,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 No medication or general farm purchases recorded in selected range.
               </p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -1072,7 +1074,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <h2 className="text-sm font-semibold text-slate-900">
                 Medication &amp; General Purchases Ledger ({filteredFarmPurchases.length})
               </h2>
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -1087,7 +1089,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <tbody className="divide-y divide-slate-100 tabular-nums">
                     {filteredFarmPurchases.map((p) => (
                       <tr key={p.id}>
-                        <td className="py-2 font-mono text-slate-700">{p.transactionDate}</td>
+                        <td className="py-2 font-mono text-slate-700">{formatIsoDateDisplay(p.transactionDate)}</td>
                         <td className="py-2 text-slate-600">
                           {PURCHASE_CATEGORY_LABEL[p.category] || p.category}
                         </td>
@@ -1154,7 +1156,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             <h2 className="text-sm font-semibold text-slate-900">
               Current Stock Balances by Feed Item
             </h2>
-            <div className="mt-3 overflow-x-auto">
+            <div className="mt-3 overflow-x-auto touch-scroll">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
@@ -1202,7 +1204,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           {salesByUnit.length === 0 ? (
             <p className="py-4 text-xs text-slate-500">No sales in selected date range.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto">
+            <div className="mt-3 overflow-x-auto touch-scroll">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500">
@@ -1217,7 +1219,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                     <tr key={row.unitName}>
                       <td className="py-2.5 font-sans font-semibold text-slate-900">{row.unitName}</td>
                       <td className="py-2.5 text-right">{row.qty.toLocaleString()}</td>
-                      <td className="py-2.5 text-right">{row.eggs.toLocaleString()}</td>
+                      <td className="py-2.5 text-right">{formatEggCountInCrates(row.eggs)}</td>
                       <td className="py-2.5 text-right font-semibold text-emerald-800">
                         {formatNgn(row.revenue)}
                       </td>
@@ -1241,7 +1243,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 No mortality entries recorded in selected date range.
               </p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -1285,7 +1287,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <h2 className="text-sm font-semibold text-slate-900">
                 Period Losses by Reason for Death
               </h2>
-              <div className="mt-3 overflow-x-auto">
+              <div className="mt-3 overflow-x-auto touch-scroll">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 text-slate-500">
@@ -1315,7 +1317,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           {auditLogs.length === 0 ? (
             <p className="p-6 text-xs text-slate-500">No audit events recorded yet.</p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto touch-scroll">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">

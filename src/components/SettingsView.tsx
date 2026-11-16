@@ -1,13 +1,23 @@
 import React, { useState } from 'react';
-import { Check, Edit2, Plus, UserPlus, X } from 'lucide-react';
+import { Calendar, Check, ChevronDown, ChevronRight, Clock, Edit2, Layers, Pill, Plus, Repeat, Syringe, Trash2, UserPlus, X } from 'lucide-react';
 import {
   DEFAULT_BAG_WEIGHT_KG,
   DEFAULT_STAFF_PERMISSIONS,
   formatDateInTimezone,
   formatNgn,
   hasPermission,
+  normalizePermissions,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
+import {
+  createCarePlan,
+  createCarePlanItem,
+  deleteCarePlan,
+  deleteCarePlanItem,
+  subscribeCarePlanItems,
+  updateCarePlan,
+  updateCarePlanItem,
+} from '../services/carePlanService.ts';
 import {
   createFeedItem,
   createPen,
@@ -27,6 +37,11 @@ import type {
   FeedItem,
   Pen,
   PermissionsMatrix,
+  CarePlan,
+  CarePlanItem,
+  DepartmentType,
+  RecurrenceUnit,
+  ReminderType,
   SalesUnit,
 } from '../types/farm.ts';
 
@@ -38,7 +53,17 @@ interface SettingsViewProps {
   salesUnits: SalesUnit[];
   members: FarmMember[];
   invites: FarmInvite[];
+  carePlans?: CarePlan[];
 }
+
+
+const ALL_DEPARTMENTS: { value: DepartmentType; label: string }[] = [
+  { value: 'poultry', label: 'Poultry' },
+  { value: 'fishery', label: 'Fishery' },
+  { value: 'crops', label: 'Crops' },
+  { value: 'livestock', label: 'Livestock' },
+  { value: 'general', label: 'General / Admin' },
+];
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   farm,
@@ -48,6 +73,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   salesUnits,
   members,
   invites,
+  carePlans = [],
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
   const canEditSettings = hasPermission(member, 'settings', 'edit');
@@ -55,7 +81,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const canManageMembers = hasPermission(member, 'members', 'manage');
   const canReadMembers = hasPermission(member, 'members', 'read');
 
-  const [tab, setTab] = useState<'profile' | 'pens' | 'feeds' | 'units' | 'team'>(
+  const [tab, setTab] = useState<'profile' | 'pens' | 'careplans' | 'feeds' | 'units' | 'team'>(
     canReadSettings ? 'pens' : 'team'
   );
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -108,6 +134,54 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     structuredClone(DEFAULT_STAFF_PERMISSIONS)
   );
   const [saving, setSaving] = useState(false);
+  // Pen extra state
+  const [penDepartment, setPenDepartment] = useState<DepartmentType>('poultry');
+  const [penStaffUids, setPenStaffUids] = useState<string[]>([]);
+
+  // Care Plan state
+  const [planModal, setPlanModal] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<CarePlan | null>(null);
+  const [planName, setPlanName] = useState('');
+  const [planDesc, setPlanDesc] = useState('');
+  const [planType, setPlanType] = useState<'medication' | 'vaccination' | 'activity'>('medication');
+  const [planStatus, setPlanStatus] = useState<'active' | 'inactive'>('active');
+
+  const [activePlanIdForItems, setActivePlanIdForItems] = useState<string | null>(null);
+  const [activePlanItems, setActivePlanItems] = useState<CarePlanItem[]>([]);
+
+  // Care Plan Item state
+  const [itemModal, setItemModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<CarePlanItem | null>(null);
+  const [itemTitle, setItemTitle] = useState('');
+  const [itemReminderType, setItemReminderType] = useState<ReminderType>('medication');
+  const [itemDosage, setItemDosage] = useState('');
+  const [itemNotes, setItemNotes] = useState('');
+  const [itemOffsetDays, setItemOffsetDays] = useState('0');
+  const [itemIntervalUnit, setItemIntervalUnit] = useState<RecurrenceUnit>('once');
+  const [itemIntervalValue, setItemIntervalValue] = useState('1');
+  const [itemSortOrder, setItemSortOrder] = useState('0');
+
+  // Staff extra state
+  const [inviteDepartments, setInviteDepartments] = useState<DepartmentType[]>(['poultry']);
+  const [invitePenIds, setInvitePenIds] = useState<string[]>([]);
+  const [editMemberDepartments, setEditMemberDepartments] = useState<DepartmentType[]>(['poultry']);
+  const [editMemberPenIds, setEditMemberPenIds] = useState<string[]>([]);
+
+  // Real-time subscription to active care plan's schedule tasks
+  React.useEffect(() => {
+    if (!activePlanIdForItems) {
+      setActivePlanItems([]);
+      return;
+    }
+    const unsub = subscribeCarePlanItems(
+      farm.farmId,
+      activePlanIdForItems,
+      (items) => setActivePlanItems(items),
+      (err) => setFeedback({ type: 'error', text: formatUserFriendlyError(err) })
+    );
+    return () => unsub();
+  }, [farm.farmId, activePlanIdForItems]);
+
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -154,6 +228,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           capacity: Number(penCapacity),
           notes: penNotes,
           status: penStatus,
+          department: penDepartment,
+          assignedMemberUids: penStaffUids,
           actorUid: member.uid,
           actorName: member.displayName,
         });
@@ -165,6 +241,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           code: penCode,
           capacity: Number(penCapacity),
           notes: penNotes,
+          department: penDepartment,
+          assignedMemberUids: penStaffUids,
           actorUid: member.uid,
           actorName: member.displayName,
         });
@@ -268,6 +346,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         email: inviteEmail,
         jobTitle: inviteTitle,
         permissions: invitePerms,
+        departments: inviteDepartments,
+        assignedPenIds: invitePenIds,
         actorUid: member.uid,
         actorName: member.displayName,
       });
@@ -276,6 +356,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         text: `Invitation created for ${inviteEmail}. When they sign in with Google using this email, they can accept access to ${farm.name}.`,
       });
       setInviteEmail('');
+      setInviteDepartments(['poultry']);
+      setInvitePenIds([]);
     } catch (err) {
       setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
     } finally {
@@ -295,11 +377,139 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         jobTitle: editMemberTitle,
         status: editMemberStatus,
         permissions: editMemberPerms,
+        departments: editMemberDepartments,
+        assignedPenIds: editMemberPenIds,
         actorUid: member.uid,
         actorName: member.displayName,
       });
       setFeedback({ type: 'success', text: `Updated access for ${editingMember.displayName}.` });
       setEditingMember(null);
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+
+  const handleSavePlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setFeedback(null);
+    try {
+      if (editingPlan) {
+        await updateCarePlan({
+          farmId: farm.farmId,
+          plan: editingPlan,
+          name: planName,
+          description: planDesc,
+          planType,
+          status: planStatus,
+          actorUid: member.uid,
+          actorName: member.displayName,
+        });
+        setFeedback({ type: 'success', text: `Care plan "${planName}" updated.` });
+      } else {
+        const newId = await createCarePlan({
+          farmId: farm.farmId,
+          name: planName,
+          description: planDesc,
+          planType,
+          actorUid: member.uid,
+          actorName: member.displayName,
+        });
+        setFeedback({ type: 'success', text: `Care plan "${planName}" created.` });
+        setActivePlanIdForItems(newId);
+      }
+      setPlanModal(false);
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeletePlan = async (p: CarePlan) => {
+    if (!window.confirm(`Delete care plan "${p.name}"? This removes the template schedule.`)) return;
+    setSaving(true);
+    try {
+      await deleteCarePlan({
+        farmId: farm.farmId,
+        plan: p,
+        actorUid: member.uid,
+        actorName: member.displayName,
+      });
+      if (activePlanIdForItems === p.id) setActivePlanIdForItems(null);
+      setFeedback({ type: 'success', text: `Care plan "${p.name}" deleted.` });
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activePlanIdForItems) return;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const offsetDays = Math.max(0, parseInt(itemOffsetDays, 10) || 0);
+      const intervalValue = itemIntervalUnit === 'once' ? 1 : Math.max(1, parseInt(itemIntervalValue, 10) || 1);
+      const sortOrder = parseInt(itemSortOrder, 10) || 0;
+
+      if (editingItem) {
+        await updateCarePlanItem({
+          farmId: farm.farmId,
+          item: editingItem,
+          title: itemTitle,
+          reminderType: itemReminderType,
+          dosageOrAction: itemDosage,
+          notes: itemNotes,
+          offsetDays,
+          intervalUnit: itemIntervalUnit,
+          intervalValue,
+          sortOrder,
+          actorUid: member.uid,
+          actorName: member.displayName,
+        });
+        setFeedback({ type: 'success', text: `Task "${itemTitle}" updated.` });
+      } else {
+        await createCarePlanItem({
+          farmId: farm.farmId,
+          carePlanId: activePlanIdForItems,
+          title: itemTitle,
+          reminderType: itemReminderType,
+          dosageOrAction: itemDosage,
+          notes: itemNotes,
+          offsetDays,
+          intervalUnit: itemIntervalUnit,
+          intervalValue,
+          sortOrder,
+          actorUid: member.uid,
+          actorName: member.displayName,
+        });
+        setFeedback({ type: 'success', text: `Task "${itemTitle}" added to plan.` });
+      }
+      setItemModal(false);
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteItem = async (item: CarePlanItem) => {
+    if (!window.confirm(`Delete task "${item.title}" from schedule?`)) return;
+    setSaving(true);
+    try {
+      await deleteCarePlanItem({
+        farmId: farm.farmId,
+        item,
+        actorUid: member.uid,
+        actorName: member.displayName,
+      });
+      setFeedback({ type: 'success', text: `Task "${item.title}" removed.` });
     } catch (err) {
       setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
     } finally {
@@ -320,7 +530,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     const rows: { domain: keyof PermissionsMatrix; label: string; keys: string[] }[] = [
       { domain: 'batches', label: 'Flocks & Batches', keys: ['read', 'create', 'edit', 'delete'] },
-      { domain: 'production', label: 'Egg Production', keys: ['read', 'create', 'edit', 'delete'] },
+      { domain: 'production', label: 'Egg Production', keys: ['read', 'create', 'edit', 'delete', 'approve'] },
       { domain: 'feed', label: 'Feed & Stock', keys: ['read', 'create', 'edit', 'delete'] },
       {
         domain: 'sales',
@@ -330,6 +540,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       { domain: 'reports', label: 'Reports', keys: ['read', 'export'] },
       { domain: 'settings', label: 'Farm Setup', keys: ['read', 'edit'] },
       { domain: 'members', label: 'Team Management', keys: ['read', 'manage'] },
+      { domain: 'eggStore', label: 'Egg Store', keys: ['read', 'transfer', 'receive', 'sort', 'adjust', 'distribute', 'dispose'] },
     ];
 
     return (
@@ -351,7 +562,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={() => toggle(r.domain, k)}
                       className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
                     />
-                    <span className="capitalize">{k === 'overridePrice' ? 'Override Price' : k}</span>
+                    <span className="capitalize">{k === 'overridePrice' ? 'Override Price' : k === 'approve' ? 'Approve Production' : k}</span>
                   </label>
                 ))}
               </div>
@@ -390,6 +601,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       <div className="flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 w-fit">
         {[
           { id: 'pens', label: 'Pens / Houses', visible: canReadSettings },
+          { id: 'careplans', label: 'Care Plans & Schedules', visible: canReadSettings },
           { id: 'feeds', label: 'Feed Catalogue', visible: canReadSettings },
           { id: 'units', label: 'Sales Units & Prices', visible: canReadSettings },
           { id: 'profile', label: 'Farm Profile', visible: canReadSettings },
@@ -432,6 +644,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   setPenCapacity('1000');
                   setPenNotes('');
                   setPenStatus('active');
+                  setPenDepartment('poultry');
+                  setPenStaffUids([]);
                   setPenModal(true);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900"
@@ -453,8 +667,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <tr className="border-b border-slate-200 text-slate-500">
                     <th className="py-2 font-medium">Pen Name</th>
                     <th className="py-2 font-medium">Code</th>
+                    <th className="py-2 font-medium">Department</th>
                     <th className="py-2 text-right font-medium">Capacity</th>
                     <th className="py-2 font-medium">Occupancy</th>
+                    <th className="py-2 font-medium">Assigned Staff</th>
                     <th className="py-2 font-medium">Status</th>
                     <th className="py-2 text-right font-medium">Edit</th>
                   </tr>
@@ -464,9 +680,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <tr key={p.id}>
                       <td className="py-2.5 font-medium text-slate-900">{p.name}</td>
                       <td className="py-2.5 font-mono text-slate-600">{p.code}</td>
+                      <td className="py-2.5">
+                        <span className="inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium capitalize text-slate-700">
+                          {p.department || 'poultry'}
+                        </span>
+                      </td>
                       <td className="py-2.5 text-right font-mono">{p.capacity.toLocaleString()}</td>
                       <td className="py-2.5 text-slate-600">
                         {p.activeBatchId ? 'Occupied (Active Batch)' : 'Available'}
+                      </td>
+                      <td className="py-2.5 text-slate-600 max-w-xs truncate">
+                        {p.assignedMemberUids && p.assignedMemberUids.length > 0
+                          ? members
+                              .filter((m) => p.assignedMemberUids?.includes(m.uid))
+                              .map((m) => m.displayName)
+                              .join(', ') || 'Assigned (' + p.assignedMemberUids.length + ')'
+                          : 'All / Unassigned'}
                       </td>
                       <td className="py-2.5 capitalize text-slate-700">{p.status}</td>
                       <td className="py-2.5 text-right">
@@ -480,6 +709,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               setPenCapacity(String(p.capacity));
                               setPenNotes(p.notes);
                               setPenStatus(p.status);
+                              setPenDepartment(p.department || 'poultry');
+                              setPenStaffUids(p.assignedMemberUids || []);
                               setPenModal(true);
                             }}
                             className="rounded border border-slate-200 px-2 py-1 text-slate-700 hover:bg-slate-100"
@@ -492,6 +723,267 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Care Plans & Schedules Tab */}
+      {tab === 'careplans' && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-white p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-900">Standard Care Plans &amp; Protocols</h2>
+                <p className="text-xs text-slate-500">
+                  Standardized schedules (Medication, Vaccination, Activity) with recurring task rules. Assigning to a batch automatically creates all to-dos.
+                </p>
+              </div>
+              {canEditSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingPlan(null);
+                    setPlanName('');
+                    setPlanDesc('');
+                    setPlanType('medication');
+                    setPlanStatus('active');
+                    setPlanModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900 self-start sm:self-auto"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>New Care Plan</span>
+                </button>
+              )}
+            </div>
+
+            {carePlans.length === 0 ? (
+              <p className="py-6 text-xs text-slate-500">
+                No care plans created yet. Click &quot;New Care Plan&quot; to define medication schedules, vaccination courses, or regular farm activities.
+              </p>
+            ) : (
+              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {carePlans.map((p) => {
+                  const isSelected = activePlanIdForItems === p.id;
+                  return (
+                    <div
+                      key={p.id}
+                      className={`flex flex-col justify-between rounded-xl border p-4 transition-all ${
+                        isSelected
+                          ? 'border-emerald-700 bg-emerald-50/20 shadow-sm'
+                          : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {p.planType === 'medication' && <Pill className="h-4 w-4 text-emerald-800" />}
+                            {p.planType === 'vaccination' && <Syringe className="h-4 w-4 text-purple-600" />}
+                            {p.planType === 'activity' && <Layers className="h-4 w-4 text-blue-600" />}
+                            <span className="font-semibold text-sm text-slate-900">{p.name}</span>
+                          </div>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                              p.status === 'active' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {p.status}
+                          </span>
+                        </div>
+                        {p.description && (
+                          <p className="mt-1.5 text-xs text-slate-600">{p.description}</p>
+                        )}
+                        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+                          <span className="capitalize font-medium text-slate-700">{p.planType} Plan</span>
+                          <span>•</span>
+                          <span>
+                            {p.createdAt && typeof p.createdAt === 'string'
+                              ? `Created ${p.createdAt.split('T')[0]}`
+                              : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              setActivePlanIdForItems(null);
+                            } else {
+                              setActivePlanIdForItems(p.id);
+                            }
+                          }}
+                          className={`inline-flex items-center gap-1 text-xs font-semibold ${
+                            isSelected ? 'text-emerald-800' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {isSelected ? (
+                            <>
+                              <ChevronDown className="h-3.5 w-3.5" />
+                              <span>Hide Schedule Tasks</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronRight className="h-3.5 w-3.5" />
+                              <span>View &amp; Manage Schedule Tasks</span>
+                            </>
+                          )}
+                        </button>
+                        {canEditSettings && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingPlan(p);
+                                setPlanName(p.name);
+                                setPlanDesc(p.description || '');
+                                setPlanType(p.planType);
+                                setPlanStatus(p.status);
+                                setPlanModal(true);
+                              }}
+                              className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                              title="Edit Plan"
+                            >
+                              <Edit2 className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePlan(p)}
+                              className="rounded p-1 text-red-500 hover:bg-red-50 hover:text-red-700"
+                              title="Delete Plan"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Active Plan Tasks Detail */}
+          {activePlanIdForItems && (
+            <div className="rounded-xl border border-emerald-300 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Tasks for:{' '}
+                    <span className="text-emerald-800">
+                      {carePlans.find((p) => p.id === activePlanIdForItems)?.name || 'Care Plan'}
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Schedule items will be materialized when this plan is assigned to a flock.
+                  </p>
+                </div>
+                {canEditSettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingItem(null);
+                      setItemTitle('');
+                      const currPlan = carePlans.find((p) => p.id === activePlanIdForItems);
+                      setItemReminderType(currPlan?.planType === 'vaccination' ? 'vaccination' : 'medication');
+                      setItemDosage('');
+                      setItemNotes('');
+                      setItemOffsetDays('0');
+                      setItemIntervalUnit('once');
+                      setItemIntervalValue('1');
+                      setItemSortOrder(String(activePlanItems.length));
+                      setItemModal(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Add Task to Plan</span>
+                  </button>
+                )}
+              </div>
+
+              {activePlanItems.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-500">
+                  No tasks configured for this plan yet. Click &quot;Add Task to Plan&quot; to schedule medications, vaccines, or recurring checks.
+                </div>
+              ) : (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500">
+                        <th className="py-2 font-medium">Timing (Day Offset)</th>
+                        <th className="py-2 font-medium">Task / Reminder</th>
+                        <th className="py-2 font-medium">Type</th>
+                        <th className="py-2 font-medium">Frequency</th>
+                        <th className="py-2 font-medium">Dosage / Instructions</th>
+                        <th className="py-2 text-right font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {activePlanItems.map((item) => (
+                        <tr key={item.id}>
+                          <td className="py-2.5 font-mono font-semibold text-emerald-800">
+                            Day +{item.offsetDays}
+                          </td>
+                          <td className="py-2.5">
+                            <span className="font-semibold text-slate-900">{item.title}</span>
+                            {item.notes && <p className="text-[11px] text-slate-500 mt-0.5">{item.notes}</p>}
+                          </td>
+                          <td className="py-2.5 capitalize text-slate-700">{item.reminderType}</td>
+                          <td className="py-2.5">
+                            {item.intervalUnit === 'once' ? (
+                              <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-600">Once</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                                <Repeat className="h-3 w-3" />
+                                Every {item.intervalValue > 1 ? `${item.intervalValue} ` : ''}
+                                {item.intervalUnit}s
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 text-slate-700">{item.dosageOrAction || '—'}</td>
+                          <td className="py-2.5 text-right">
+                            {canEditSettings && (
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingItem(item);
+                                    setItemTitle(item.title);
+                                    setItemReminderType(item.reminderType);
+                                    setItemDosage(item.dosageOrAction || '');
+                                    setItemNotes(item.notes || '');
+                                    setItemOffsetDays(String(item.offsetDays));
+                                    setItemIntervalUnit(item.intervalUnit);
+                                    setItemIntervalValue(String(item.intervalValue));
+                                    setItemSortOrder(String(item.sortOrder));
+                                    setItemModal(true);
+                                  }}
+                                  className="rounded border border-slate-200 px-2 py-1 text-slate-700 hover:bg-slate-100"
+                                  title="Edit Task"
+                                >
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteItem(item)}
+                                  className="rounded border border-red-200 px-2 py-1 text-red-600 hover:bg-red-50"
+                                  title="Delete Task"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -763,6 +1255,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <tr className="border-b border-slate-200 text-slate-500">
                     <th className="py-2 font-medium">Name / Email</th>
                     <th className="py-2 font-medium">Job Title</th>
+                    <th className="py-2 font-medium">Department(s)</th>
+                    <th className="py-2 font-medium">Assigned Pen(s)</th>
                     <th className="py-2 font-medium">Role</th>
                     <th className="py-2 font-medium">Status</th>
                     <th className="py-2 text-right font-medium">Manage</th>
@@ -776,6 +1270,38 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <div className="font-mono text-[11px] text-slate-500">{m.email}</div>
                       </td>
                       <td className="py-2.5 text-slate-700">{m.jobTitle}</td>
+                      <td className="py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          {m.role === 'owner' ? (
+                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
+                              All Departments
+                            </span>
+                          ) : m.departments && m.departments.length > 0 ? (
+                            m.departments.map((d) => (
+                              <span
+                                key={d}
+                                className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium capitalize text-slate-700"
+                              >
+                                {d}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium capitalize text-slate-700">
+                              poultry
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2.5 text-slate-600 max-w-xs truncate">
+                        {m.role === 'owner'
+                          ? 'All Pens'
+                          : m.assignedPenIds && m.assignedPenIds.length > 0
+                          ? pens
+                              .filter((p) => m.assignedPenIds?.includes(p.id))
+                              .map((p) => p.name)
+                              .join(', ') || m.assignedPenIds.length + ' Pens'
+                          : 'None'}
+                      </td>
                       <td className="py-2.5 capitalize text-slate-700">{m.role}</td>
                       <td className="py-2.5">
                         <span
@@ -794,7 +1320,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               setEditingMember(m);
                               setEditMemberTitle(m.jobTitle);
                               setEditMemberStatus(m.status);
-                              setEditMemberPerms(structuredClone(m.permissions));
+                              setEditMemberPerms(normalizePermissions(m.permissions));
+                              setEditMemberDepartments(m.departments && m.departments.length > 0 ? m.departments : ['poultry']);
+                              setEditMemberPenIds(m.assignedPenIds || []);
                             }}
                             className="rounded border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
                           >
@@ -848,6 +1376,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Assigned Department(s) *</label>
+                <p className="text-[11px] text-slate-500 mb-1.5">
+                  Staff can only access modules for the departments they are assigned to (e.g. Poultry, Fishery, Crops).
+                </p>
+                <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                  {ALL_DEPARTMENTS.map((dept) => (
+                    <label key={dept.value} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={inviteDepartments.includes(dept.value)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setInviteDepartments([...inviteDepartments, dept.value]);
+                          } else {
+                            if (inviteDepartments.length > 1) {
+                              setInviteDepartments(inviteDepartments.filter((d) => d !== dept.value));
+                            }
+                          }
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                      />
+                      <span>{dept.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Assigned Pens / Houses</label>
+                <p className="text-[11px] text-slate-500 mb-1.5">
+                  Staff will only see notifications and reminders for their assigned pens.
+                </p>
+                {pens.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No pens created yet.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                    {pens.map((pen) => (
+                      <label key={pen.id} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={invitePenIds.includes(pen.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setInvitePenIds([...invitePenIds, pen.id]);
+                            } else {
+                              setInvitePenIds(invitePenIds.filter((id) => id !== pen.id));
+                            }
+                          }}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                        />
+                        <span>{pen.name} ({pen.code})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div>
@@ -972,6 +1558,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </select>
                 </div>
               )}
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Department</label>
+                <select
+                  value={penDepartment}
+                  onChange={(e) => setPenDepartment(e.target.value as DepartmentType)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {ALL_DEPARTMENTS.map((dept) => (
+                    <option key={dept.value} value={dept.value}>
+                      {dept.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Assigned Staff Members</label>
+                <p className="text-[11px] text-slate-500 mb-1">
+                  Staff assigned here will see notifications and reminders for this pen.
+                </p>
+                <div className="max-h-36 overflow-y-auto space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                  {members.filter((m) => m.status === 'active').map((m) => (
+                    <label key={m.uid} className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={penStaffUids.includes(m.uid)}
+                        onChange={(e) => {
+                          if (e.target.checked) setPenStaffUids([...penStaffUids, m.uid]);
+                          else setPenStaffUids(penStaffUids.filter((uid) => uid !== m.uid));
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                      />
+                      <span>{m.displayName} ({m.jobTitle})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700">Notes</label>
                 <input
@@ -1163,6 +1785,212 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
+      {/* Care Plan Modal */}
+      {planModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <h3 className="text-base font-bold text-slate-900">
+                {editingPlan ? 'Edit Care Plan' : 'Create Care Plan'}
+              </h3>
+              <button type="button" onClick={() => setPlanModal(false)} className="p-1 text-slate-500">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSavePlan} className="mt-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Plan Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={planName}
+                  onChange={(e) => setPlanName(e.target.value)}
+                  placeholder="e.g. Broiler 6-Week Standard Medication"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700">Plan Category *</label>
+                  <select
+                    value={planType}
+                    onChange={(e) => setPlanType(e.target.value as 'medication' | 'vaccination' | 'activity')}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="medication">Medication Plan</option>
+                    <option value="vaccination">Vaccination Plan</option>
+                    <option value="activity">Activity Plan</option>
+                  </select>
+                </div>
+                {editingPlan && (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Status</label>
+                    <select
+                      value={planStatus}
+                      onChange={(e) => setPlanStatus(e.target.value as 'active' | 'inactive')}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Description</label>
+                <textarea
+                  rows={2}
+                  value={planDesc}
+                  onChange={(e) => setPlanDesc(e.target.value)}
+                  placeholder="Optional details or objectives for this protocol..."
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-3">
+                <button type="button" onClick={() => setPlanModal(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium">
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving} className="rounded-lg bg-emerald-800 px-4 py-2 text-xs font-medium text-white">
+                  {saving ? 'Saving...' : 'Save Plan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Care Plan Task Modal */}
+      {itemModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <h3 className="text-base font-bold text-slate-900">
+                {editingItem ? 'Edit Task in Plan' : 'Add Task to Plan'}
+              </h3>
+              <button type="button" onClick={() => setItemModal(false)} className="p-1 text-slate-500">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <form onSubmit={handleSaveItem} className="mt-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Task / Protocol Title *</label>
+                <input
+                  type="text"
+                  required
+                  value={itemTitle}
+                  onChange={(e) => setItemTitle(e.target.value)}
+                  placeholder="e.g. Gumboro (IBD) 1st Dose"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-700">Task Type *</label>
+                  <select
+                    value={itemReminderType}
+                    onChange={(e) => setItemReminderType(e.target.value as ReminderType)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="medication">Medication</option>
+                    <option value="vaccination">Vaccination</option>
+                    <option value="feeding">Feeding</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="inspection">Inspection</option>
+                    <option value="general">General Activity</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-slate-700">
+                    Day Offset (Days from Batch Placement) *
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    required
+                    value={itemOffsetDays}
+                    onChange={(e) => setItemOffsetDays(e.target.value)}
+                    placeholder="e.g. 7 for Day 8"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                  />
+                  <span className="text-[10px] text-slate-400">0 = placement day, 7 = 1 week later</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
+                <label className="block text-xs font-semibold text-slate-800">Recurrence Rule</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600">Interval Unit</label>
+                    <select
+                      value={itemIntervalUnit}
+                      onChange={(e) => setItemIntervalUnit(e.target.value as RecurrenceUnit)}
+                      className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    >
+                      <option value="once">Once (No Recurrence)</option>
+                      <option value="hour">Hourly (nth hour)</option>
+                      <option value="day">Daily (nth day)</option>
+                      <option value="week">Weekly (nth week)</option>
+                      <option value="month">Monthly (nth month)</option>
+                    </select>
+                  </div>
+                  {itemIntervalUnit !== 'once' && (
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600">
+                        Repeat Every (Interval)
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        required
+                        value={itemIntervalValue}
+                        onChange={(e) => setItemIntervalValue(e.target.value)}
+                        placeholder="1"
+                        className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                      />
+                      <span className="text-[10px] text-slate-500">
+                        e.g. 2 = every 2 {itemIntervalUnit}s
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Dosage / Key Action</label>
+                <input
+                  type="text"
+                  value={itemDosage}
+                  onChange={(e) => setItemDosage(e.target.value)}
+                  placeholder="e.g. 1 vial in 5L clean drinking water with skimmed milk"
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Detailed Instructions / Notes</label>
+                <textarea
+                  rows={2}
+                  value={itemNotes}
+                  onChange={(e) => setItemNotes(e.target.value)}
+                  placeholder="Withdraw water 2 hours before administration..."
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3">
+                <button type="button" onClick={() => setItemModal(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium">
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving} className="rounded-lg bg-emerald-800 px-4 py-2 text-xs font-medium text-white">
+                  {saving ? 'Saving...' : 'Save Task'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Edit Staff Member Modal */}
       {editingMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" role="dialog" aria-modal="true">
@@ -1199,6 +2027,64 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </select>
                 </div>
               </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Assigned Department(s) *</label>
+                <p className="text-[11px] text-slate-500 mb-1.5">
+                  Controls module visibility (Poultry, Fishery, Crops, etc.).
+                </p>
+                <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                  {ALL_DEPARTMENTS.map((dept) => (
+                    <label key={dept.value} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={editMemberDepartments.includes(dept.value)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setEditMemberDepartments([...editMemberDepartments, dept.value]);
+                          } else {
+                            if (editMemberDepartments.length > 1) {
+                              setEditMemberDepartments(editMemberDepartments.filter((d) => d !== dept.value));
+                            }
+                          }
+                        }}
+                        className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                      />
+                      <span>{dept.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700">Assigned Pens / Houses</label>
+                <p className="text-[11px] text-slate-500 mb-1.5">
+                  Staff will only receive reminders and notifications for these pens.
+                </p>
+                {pens.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">No pens created yet.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                    {pens.map((pen) => (
+                      <label key={pen.id} className="inline-flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editMemberPenIds.includes(pen.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setEditMemberPenIds([...editMemberPenIds, pen.id]);
+                            } else {
+                              setEditMemberPenIds(editMemberPenIds.filter((id) => id !== pen.id));
+                            }
+                          }}
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
+                        />
+                        <span>{pen.name} ({pen.code})</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <p className="mb-1.5 text-xs font-medium text-slate-700">Granular Permissions</p>
                 {renderPermissionMatrixEditor(editMemberPerms, setEditMemberPerms)}

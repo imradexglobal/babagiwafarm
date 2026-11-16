@@ -11,6 +11,7 @@ import {
   Milestone,
   Pill,
   Plus,
+  Repeat,
   RotateCcw,
   Syringe,
   X,
@@ -34,6 +35,7 @@ import type {
   FarmReminder,
   MedicationTreatmentType,
   PoultryBatch,
+  RecurrenceUnit,
   ReminderType,
 } from '../types/farm.ts';
 
@@ -156,6 +158,8 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
   const [formTitle, setFormTitle] = useState('');
   const [formDosage, setFormDosage] = useState('');
   const [formNotes, setFormNotes] = useState('');
+  const [formIntervalUnit, setFormIntervalUnit] = useState<RecurrenceUnit>('once');
+  const [formIntervalValue, setFormIntervalValue] = useState('1');
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -172,12 +176,20 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
   const batchById = useMemo(() => new Map(batches.map((b) => [b.id, b])), [batches]);
   const persistedById = useMemo(() => new Map(reminders.map((r) => [r.id, r])), [reminders]);
 
+  // Filter timeline items based on staff member pen assignments
+  const scopedTimelineItems = useMemo(() => {
+    if (member.role === 'staff' && member.assignedPenIds && member.assignedPenIds.length > 0) {
+      return timelineItems.filter((item) => member.assignedPenIds!.includes(item.penId));
+    }
+    return timelineItems;
+  }, [timelineItems, member]);
+
   const kpis = useMemo(() => {
     let overdue = 0;
     let dueWeek = 0;
     let upcomingMonth = 0;
     let completed = 0;
-    for (const item of timelineItems) {
+    for (const item of scopedTimelineItems) {
       if (item.status === 'completed') {
         completed += 1;
         continue;
@@ -188,10 +200,10 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
       else if (item.daysUntilDue <= 30) upcomingMonth += 1;
     }
     return { overdue, dueWeek, upcomingMonth, completed };
-  }, [timelineItems]);
+  }, [scopedTimelineItems]);
 
   const filteredItems = useMemo(() => {
-    return timelineItems.filter((item) => {
+    return scopedTimelineItems.filter((item) => {
       if (typeFilter !== 'all' && item.reminderType !== typeFilter) return false;
       if (statusFilter === 'pending') return item.status === 'pending';
       if (statusFilter === 'urgent') return item.status === 'pending' && item.daysUntilDue <= 14;
@@ -200,7 +212,7 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
       }
       return true;
     });
-  }, [timelineItems, statusFilter, typeFilter]);
+  }, [scopedTimelineItems, statusFilter, typeFilter]);
 
   const openCreateDrawer = () => {
     const preferredBatch =
@@ -213,6 +225,8 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
     setFormTitle('');
     setFormDosage('');
     setFormNotes('');
+    setFormIntervalUnit('once');
+    setFormIntervalValue('1');
     setFormError(null);
     setCreateOpen(true);
   };
@@ -232,6 +246,8 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
         dueDate: formDueDate,
         dosageOrAction: formDosage,
         notes: formNotes,
+        intervalUnit: formIntervalUnit,
+        intervalValue: formIntervalUnit === 'once' ? 1 : Math.max(1, Number(formIntervalValue) || 1),
         timeZone: farm.timezone,
         actorUid: member.uid,
         actorName: member.displayName,
@@ -678,6 +694,38 @@ export const DailyRemindersPanel: React.FC<DailyRemindersPanelProps> = ({
                       )}
                       <span aria-hidden="true">·</span>
                       <span>{item.source === 'standard' ? 'Standard Schedule' : 'Custom'}</span>
+                      {(() => {
+                        const persisted = item.persistedId ? persistedById.get(item.persistedId) : null;
+                        return (
+                          <>
+                            {persisted?.intervalUnit && persisted.intervalUnit !== 'once' && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 border border-indigo-200">
+                                  <Repeat className="h-3 w-3" />
+                                  Every {persisted.intervalValue || 1} {persisted.intervalUnit}{persisted.intervalValue && persisted.intervalValue > 1 ? 's' : ''}
+                                </span>
+                              </>
+                            )}
+                            {persisted?.carePlanId && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="inline-flex items-center gap-1 rounded bg-teal-50 px-1.5 py-0.5 text-[10px] font-semibold text-teal-800 border border-teal-200">
+                                  Care Plan
+                                </span>
+                              </>
+                            )}
+                            {persisted?.occurrenceIndex !== undefined && persisted.occurrenceIndex > 0 && (
+                              <>
+                                <span aria-hidden="true">·</span>
+                                <span className="text-[10px] text-slate-500 font-mono">
+                                  #{persisted.occurrenceIndex + 1}
+                                </span>
+                              </>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
 
                     <p

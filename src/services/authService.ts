@@ -1,4 +1,5 @@
 import {
+  deleteDoc,
   doc,
   getDoc,
   onSnapshot,
@@ -28,9 +29,21 @@ export async function getUserBinding(uid: string): Promise<UserFarmBinding | nul
   const path = `users/${uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', uid));
-    return snap.exists() ? (snap.data() as UserFarmBinding) : null;
+    if (!snap.exists()) return null;
+    const data = snap.data() as UserFarmBinding;
+    if (!data || !data.farmId) return null;
+    return data;
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, path);
+  }
+}
+
+export async function clearUserBinding(uid: string): Promise<void> {
+  const path = `users/${uid}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
   }
 }
 
@@ -102,6 +115,8 @@ export async function createFarmAndOwner(params: {
     role: 'owner',
     status: 'active',
     permissions: OWNER_FULL_PERMISSIONS,
+    departments: ['poultry', 'fishery', 'crops', 'livestock', 'general'],
+    assignedPenIds: [],
     createdBy: user.uid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -166,6 +181,8 @@ export async function acceptPendingInvite(params: {
     role: 'staff',
     status: 'active',
     permissions: invite.permissions,
+    departments: invite.departments || ['poultry'],
+    assignedPenIds: invite.assignedPenIds || [],
     createdBy: invite.invitedBy,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),

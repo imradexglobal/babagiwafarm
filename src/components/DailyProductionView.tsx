@@ -36,6 +36,7 @@ import {
   formatBirdAge,
   formatDateInTimezone,
   formatGramsToKgAndBags,
+  formatEggCountInCrates,
   formatIsoDateDisplay,
   formatNgn,
   hasPermission,
@@ -63,6 +64,7 @@ import {
   voidMortalityEntry,
 } from '../services/mortalityService.ts';
 import {
+  approveEggProductionParent,
   createEggProduction,
   updateEggProduction,
   voidEggProduction,
@@ -172,6 +174,7 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
   const canCreateProd = hasPermission(member, 'production', 'create');
   const canEditProd = hasPermission(member, 'production', 'edit');
   const canDeleteProd = hasPermission(member, 'production', 'delete');
+  const canApproveProd = hasPermission(member, 'production', 'approve');
 
   const canReadFeed = hasPermission(member, 'feed', 'read');
   const canCreateFeed = hasPermission(member, 'feed', 'create');
@@ -997,7 +1000,7 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
   const eggSummary = useMemo(
     () =>
       filteredProd
-        .filter((e) => !e.isVoided)
+        .filter((e) => !e.isVoided && (e.status === undefined || e.status === 'APPROVED'))
         .reduce(
           (acc, e) => {
             acc.entries += 1;
@@ -1253,6 +1256,20 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
     setECracked(String(entry.crackedEggs));
     setEDamaged(String(entry.damagedEggs));
     setERemarks(entry.remarks);
+  };
+
+  const approveDailyProduction = async (entry: EggProductionEntry) => {
+    if (!entry.parentId) {
+      setFeedback({ type: 'error', text: 'This legacy production entry has no parent record and requires migration before approval.' });
+      return;
+    }
+    setFeedback(null);
+    try {
+      await approveEggProductionParent({ farmId: farm.farmId, parentId: entry.parentId, actor: member });
+      setFeedback({ type: 'success', text: 'Daily production approved. All eligible child entries are now operational and locked.' });
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    }
   };
 
   const startEditFeed = (c: FeedConsumption) => {
@@ -2461,7 +2478,7 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
       )}
 
       {/* Ledger & Trends Sub-Navigation Tabs (Zero-Pill Counts) */}
-      <div className="flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1.5">
+      <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white p-1.5 overflow-x-auto no-scrollbar touch-scroll sm:flex-wrap">
         {visibleSubTabs.map((t) => {
           const Icon = t.Icon;
           const active = effectiveSubTab === t.id;
@@ -2593,22 +2610,28 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
             <div>
               <p className="text-xs text-slate-500">Intact Eggs</p>
               <p className="mt-0.5 font-mono text-lg font-bold text-emerald-800">
-                {eggSummary.intactEggs.toLocaleString()}
+                {formatEggCountInCrates(eggSummary.intactEggs)}
               </p>
               <p className="text-[11px] text-slate-500">
-                {Math.floor(eggSummary.intactEggs / 30)} crates + {eggSummary.intactEggs % 30} pcs
+                {eggSummary.intactEggs.toLocaleString()} pcs
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Cracked / Damaged</p>
               <p className="mt-0.5 font-mono text-lg font-bold text-amber-700">
-                {eggSummary.crackedEggs.toLocaleString()} / {eggSummary.damagedEggs.toLocaleString()}
+                {formatEggCountInCrates(eggSummary.crackedEggs + eggSummary.damagedEggs)}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                {eggSummary.crackedEggs} / {eggSummary.damagedEggs} pcs
               </p>
             </div>
             <div>
               <p className="text-xs text-slate-500">Grand Total Eggs</p>
               <p className="mt-0.5 font-mono text-lg font-bold text-slate-900">
-                {eggSummary.totalEggs.toLocaleString()}
+                {formatEggCountInCrates(eggSummary.totalEggs)}
+              </p>
+              <p className="text-[11px] text-slate-500">
+                {eggSummary.totalEggs.toLocaleString()} pcs
               </p>
             </div>
           </div>
@@ -2624,7 +2647,8 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
@@ -2662,16 +2686,21 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                           {e.crates}c + {e.pieces}p
                         </td>
                         <td className="px-4 py-3 text-right font-mono font-medium text-emerald-800">
-                          {e.intactEggs.toLocaleString()}
+                          {formatEggCountInCrates(e.intactEggs)}
                         </td>
                         <td className="px-4 py-3 text-right font-mono">
-                          {e.crackedEggs} / {e.damagedEggs}
+                          {e.crackedEggs + e.damagedEggs > 0 ? formatEggCountInCrates(e.crackedEggs + e.damagedEggs) : '0'}
                         </td>
                         <td className="px-4 py-3 text-right font-mono font-semibold text-slate-900">
-                          {e.totalEggs.toLocaleString()}
+                          <div>{formatEggCountInCrates(e.totalEggs)}</div>
+                          <div className="text-[10px] text-slate-400 font-normal">({e.totalEggs.toLocaleString()} pcs)</div>
                         </td>
                         <td className="px-4 py-3">
                           <div>{e.createdByName}</div>
+                          <div className={`text-[11px] font-semibold ${e.status === 'PENDING' ? 'text-amber-700' : e.status === 'APPROVED' ? 'text-emerald-700' : 'text-slate-500'}`}>
+                            {e.status || (e.isVoided ? 'VOIDED' : 'APPROVED')}
+                            {e.status === 'APPROVED' && e.approvedByName ? ` by ${e.approvedByName}` : ''}
+                          </div>
                           {e.isVoided && (
                             <div className="text-[11px] font-medium text-red-700">
                               VOIDED: {e.voidReason}
@@ -2687,8 +2716,18 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                           )}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {!e.isVoided && (
+                          {!e.isVoided && e.status === 'PENDING' && (
                             <div className="inline-flex items-center gap-2">
+                              {canApproveProd && (
+                                <button
+                                  type="button"
+                                  onClick={() => approveDailyProduction(e)}
+                                  className="rounded border border-emerald-200 px-2 py-1 text-emerald-700 hover:bg-emerald-50"
+                                  title="Review and approve the complete daily production record"
+                                >
+                                  <CheckSquare className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                               {canEditProd && (
                                 <button
                                   type="button"
@@ -2717,6 +2756,66 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                   </tbody>
                 </table>
               </div>
+              <div className="md:hidden space-y-3 p-3">
+                {filteredProd.map((e) => (
+                  <div key={e.id} className={`rounded-xl border p-3.5 space-y-2.5 ${e.isVoided ? 'border-slate-200 bg-slate-50/60 opacity-60' : 'border-slate-200 bg-white shadow-xs'}`}>
+                    <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-2">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-900">{formatIsoDateDisplay(e.transactionDate)}</span>
+                          {e.transactionTime && <span className="font-mono text-[11px] text-slate-500">· {e.transactionTime}</span>}
+                        </div>
+                        <p className="text-[11px] text-slate-600 mt-0.5">{e.batchCodeSnapshot} · {e.penNameSnapshot}</p>
+                      </div>
+                      <span className="font-mono text-[11px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded">{formatBirdAge(e.birdAgeDaysAtTransaction)}</span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <span className="text-[10px] uppercase font-semibold text-slate-400 block">Intact</span>
+                        <span className="font-mono font-bold text-emerald-800">{formatEggCountInCrates(e.intactEggs)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-semibold text-slate-400 block">Cracked/Dmg</span>
+                        <span className="font-mono text-amber-700">{e.crackedEggs + e.damagedEggs > 0 ? formatEggCountInCrates(e.crackedEggs + e.damagedEggs) : '0'}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase font-semibold text-slate-400 block">Total</span>
+                        <span className="font-mono font-bold text-slate-900">{formatEggCountInCrates(e.totalEggs)}</span>
+                      </div>
+                    </div>
+
+                    {e.remarks && <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded">"{e.remarks}"</p>}
+
+                    <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[11px]">
+                      <span className="text-slate-400 truncate">By: {e.createdByName}</span>
+                      {!e.isVoided && (
+                        <div className="flex items-center gap-2">
+                          {canEditProd && (
+                            <button
+                              type="button"
+                              onClick={() => startEditEgg(e)}
+                              className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100"
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {canDeleteProd && (
+                            <button
+                              type="button"
+                              onClick={() => setVoidTarget({ kind: 'egg', item: e })}
+                              className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50"
+                            >
+                              Void
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              </>
             )}
           </div>
         </div>
@@ -2762,7 +2861,7 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                 </p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead>
                     <tr className="border-b border-slate-200 bg-slate-50 text-slate-500">
@@ -3575,11 +3674,11 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
       {/* EDIT ENTRY MODAL (Per-record corrections preserving business rules) */}
       {(editEgg || editFeed || editMed || editMort || editEnv) && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 bg-white p-6 shadow-xl">
+          <div className="max-h-[92vh] sm:max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-xl border border-slate-200 bg-white p-4 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <h2 className="text-lg font-bold text-slate-900">
                 {editEgg

@@ -6,6 +6,7 @@ import {
   convertFeedToGrams,
   findQualifyingPurchaseForConsumption,
   formatDateInTimezone,
+  formatIsoDateDisplay,
   formatGramsToKgAndBags,
   formatNgn,
   hasPermission,
@@ -449,7 +450,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     <tr key={c.id} className={c.isVoided ? 'bg-slate-50 text-slate-400' : 'hover:bg-slate-50'}>
                       <td className="px-4 py-3 font-mono">
                         <div className={c.isVoided ? 'line-through' : 'font-medium text-slate-900'}>
-                          {c.transactionDate}
+                          {formatIsoDateDisplay(c.transactionDate)}
                         </div>
                         <div className="text-[11px] text-slate-500">{c.transactionTime || '—'}</div>
                       </td>
@@ -536,7 +537,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 {visiblePurchases.map((p) => (
                   <tr key={p.id} className={p.isVoided ? 'bg-slate-50 text-slate-400' : 'hover:bg-slate-50'}>
                     <td className="px-4 py-3 font-mono font-medium text-slate-900">
-                      <span className={p.isVoided ? 'line-through' : ''}>{p.transactionDate}</span>
+                      <span className={p.isVoided ? 'line-through' : ''}>{formatIsoDateDisplay(p.transactionDate)}</span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-slate-900">{p.feedTypeSnapshot}</div>

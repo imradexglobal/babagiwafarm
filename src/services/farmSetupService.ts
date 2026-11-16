@@ -14,6 +14,7 @@ import { DEFAULT_BAG_WEIGHT_KG, generateId, toEmailKey } from '../domain/calcula
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type {
   AuditLog,
+  DepartmentType,
   FarmInvite,
   FarmMember,
   FeedItem,
@@ -75,6 +76,8 @@ export async function createPen(params: {
   code: string;
   capacity: number;
   notes: string;
+  department?: DepartmentType;
+  assignedMemberUids?: string[];
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -96,6 +99,8 @@ export async function createPen(params: {
     code: code.slice(0, 30),
     capacity: params.capacity,
     sector: 'poultry' as const,
+    department: params.department || 'poultry',
+    assignedMemberUids: params.assignedMemberUids || [],
     activeBatchId: '',
     notes: params.notes.trim().slice(0, 300),
     status: 'active' as const,
@@ -131,6 +136,8 @@ export async function updatePen(params: {
   capacity: number;
   notes: string;
   status: 'active' | 'inactive';
+  department?: DepartmentType;
+  assignedMemberUids?: string[];
   actorUid: string;
   actorName: string;
 }): Promise<void> {
@@ -152,6 +159,8 @@ export async function updatePen(params: {
     capacity: params.capacity,
     notes: params.notes.trim().slice(0, 300),
     status: params.status,
+    department: params.department || params.pen.department || 'poultry',
+    assignedMemberUids: params.assignedMemberUids !== undefined ? params.assignedMemberUids : (params.pen.assignedMemberUids || []),
     updatedAt: serverTimestamp(),
   };
   batch.update(penRef, updates);
@@ -400,6 +409,8 @@ export async function createStaffInvite(params: {
   email: string;
   jobTitle: string;
   permissions: PermissionsMatrix;
+  departments?: DepartmentType[];
+  assignedPenIds?: string[];
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -413,6 +424,8 @@ export async function createStaffInvite(params: {
   const emailKey = toEmailKey(emailLower);
   const inviteId = generateId('inv');
   const batch = writeBatch(db);
+  const departments = params.departments && params.departments.length > 0 ? params.departments : ['poultry' as DepartmentType];
+  const assignedPenIds = params.assignedPenIds || [];
 
   batch.set(doc(db, 'pendingInvites', emailKey), {
     emailKey,
@@ -423,6 +436,8 @@ export async function createStaffInvite(params: {
     jobTitle: jobTitle.slice(0, 80),
     role: 'staff',
     permissions: params.permissions,
+    departments,
+    assignedPenIds,
     status: 'pending',
     invitedBy: params.actorUid,
     acceptedByUid: '',
@@ -437,6 +452,8 @@ export async function createStaffInvite(params: {
     emailLower: emailLower.slice(0, 200),
     jobTitle: jobTitle.slice(0, 80),
     permissions: params.permissions,
+    departments,
+    assignedPenIds,
     status: 'pending',
     invitedBy: params.actorUid,
     acceptedByUid: '',
@@ -504,6 +521,8 @@ export async function updateStaffMember(params: {
   jobTitle: string;
   status: 'active' | 'inactive';
   permissions: PermissionsMatrix;
+  departments?: DepartmentType[];
+  assignedPenIds?: string[];
   actorUid: string;
   actorName: string;
 }): Promise<void> {
@@ -516,12 +535,18 @@ export async function updateStaffMember(params: {
 
   const batch = writeBatch(db);
   const memberRef = doc(db, 'farms', params.farmId, 'members', params.target.uid);
-  const updates = {
+  const updates: Record<string, unknown> = {
     jobTitle: params.jobTitle.trim().slice(0, 80) || params.target.jobTitle,
     status: params.status,
     permissions: params.permissions,
     updatedAt: serverTimestamp(),
   };
+  if (params.departments !== undefined) {
+    updates.departments = params.departments;
+  }
+  if (params.assignedPenIds !== undefined) {
+    updates.assignedPenIds = params.assignedPenIds;
+  }
   batch.update(memberRef, updates);
   const audit = buildAuditLogEntry({
     farmId: params.farmId,
