@@ -4,6 +4,11 @@ import {
   DEFAULT_STAFF_PERMISSIONS,
   OWNER_FULL_PERMISSIONS,
   calculateBatchMortalityStats,
+  calculateCostPerEgg,
+  calculateCostPerKgBodyWeight,
+  calculateFeedConversionRatio,
+  calculateHenDayRate,
+  calculateHenHousedRate,
   calculateBirdAgeDays,
   calculateEggCounts,
   computeConsumptionCostNgn,
@@ -16,6 +21,18 @@ import {
   sanitizeCsvCell,
 } from '../src/domain/calculations.ts';
 import type { FarmMember, FeedPurchase, MortalityEntry } from '../src/types/farm.ts';
+
+test('poultry KPI calculations return rounded ratios and handle zero denominators', () => {
+  assert.equal(calculateHenDayRate(850, 1000), 85);
+  assert.equal(calculateHenHousedRate(800, 1000), 80);
+  assert.equal(calculateFeedConversionRatio(125, 250, 'broiler'), 0.5);
+  assert.equal(calculateFeedConversionRatio(60, 300, 'layer'), 0.2);
+  assert.equal(calculateCostPerEgg(250_000, 10_000), 25);
+  assert.equal(calculateCostPerKgBodyWeight(1_200_000, 800, 2.5), 600);
+  assert.equal(calculateHenDayRate(10, 0), 0);
+  assert.equal(calculateCostPerEgg(100, 0), 0);
+  assert.equal(calculateCostPerKgBodyWeight(100, 0, 2), 0);
+});
 
 test('calculateBirdAgeDays computes age accurately relative to historical transactionDate from hatchDate', () => {
   const age = calculateBirdAgeDays({

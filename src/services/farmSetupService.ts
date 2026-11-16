@@ -205,7 +205,8 @@ export async function createFeedItem(params: {
   const stockRef = doc(db, 'farms', params.farmId, 'feedStock', id);
 
   try {
-    await setDoc(itemRef, {
+    const batch = writeBatch(db);
+    batch.set(itemRef, {
       id,
       farmId: params.farmId,
       feedType: feedType.slice(0, 80),
@@ -217,7 +218,6 @@ export async function createFeedItem(params: {
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
-    const batch = writeBatch(db);
     batch.set(stockRef, {
       feedItemId: id,
       farmId: params.farmId,

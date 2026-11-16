@@ -21,6 +21,41 @@ export const EGGS_PER_CRATE = 30;
 export const DEFAULT_BAG_WEIGHT_KG = 25;
 export const DEFAULT_TIMEZONE = 'Africa/Lagos';
 
+/** Percentage of live hens laying intact eggs on a given day. */
+export function calculateHenDayRate(intactEggs: number, liveBirds: number): number {
+  if (![intactEggs, liveBirds].every(Number.isFinite) || intactEggs < 0 || liveBirds <= 0) return 0;
+  return Math.round((intactEggs / liveBirds) * 10000) / 100;
+}
+
+/** Percentage of the originally housed flock represented by today's intact eggs. */
+export function calculateHenHousedRate(intactEggs: number, initialBirds: number): number {
+  if (![intactEggs, initialBirds].every(Number.isFinite) || intactEggs < 0 || initialBirds <= 0) return 0;
+  return Math.round((intactEggs / initialBirds) * 10000) / 100;
+}
+
+/** Feed kg per production unit (egg mass/dozens for layers, weight gain kg for broilers). */
+export function calculateFeedConversionRatio(
+  totalFeedKg: number,
+  productionMetric: number,
+  type: 'layer' | 'broiler'
+): number {
+  if (!['layer', 'broiler'].includes(type) || !Number.isFinite(totalFeedKg) || totalFeedKg < 0 || !Number.isFinite(productionMetric) || productionMetric <= 0) return 0;
+  return Math.round((totalFeedKg / productionMetric) * 10000) / 10000;
+}
+
+/** Batch expense allocated over intact eggs produced (NGN/egg). */
+export function calculateCostPerEgg(totalBatchCostNgn: number, totalIntactEggs: number): number {
+  if (!Number.isFinite(totalBatchCostNgn) || totalBatchCostNgn < 0 || !Number.isFinite(totalIntactEggs) || totalIntactEggs <= 0) return 0;
+  return Math.round((totalBatchCostNgn / totalIntactEggs) * 100) / 100;
+}
+
+/** Batch expense per kg of current live body weight (NGN/kg). */
+export function calculateCostPerKgBodyWeight(totalBatchCostNgn: number, liveBirds: number, avgWeightKg: number): number {
+  const liveWeightKg = liveBirds * avgWeightKg;
+  if (!Number.isFinite(totalBatchCostNgn) || totalBatchCostNgn < 0 || !Number.isFinite(liveWeightKg) || liveWeightKg <= 0) return 0;
+  return Math.round((totalBatchCostNgn / liveWeightKg) * 100) / 100;
+}
+
 export const OWNER_FULL_PERMISSIONS: PermissionsMatrix = {
   batches: { read: true, create: true, edit: true, delete: true },
   production: { read: true, create: true, edit: true, delete: true, approve: true },

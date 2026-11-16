@@ -6,6 +6,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  where,
   writeBatch,
 } from 'firebase/firestore';
 import { generateId } from '../domain/calculations.ts';
@@ -360,7 +361,20 @@ export async function deleteCarePlan(params: {
   actorUid: string;
   actorName: string;
 }): Promise<void> {
+  const activeBatches = await getDocs(query(
+    collection(db, 'farms', params.farmId, 'batches'),
+    where('status', '==', 'active'),
+    where('assignedCarePlanIds', 'array-contains', params.plan.id)
+  ));
+  if (!activeBatches.empty) {
+    throw new Error('This care plan is assigned to an active batch. Remove it from the batch before deleting the plan.');
+  }
+  const items = await getDocs(collection(db, 'farms', params.farmId, 'carePlans', params.plan.id, 'items'));
+  if (items.size > 498) {
+    throw new Error('This care plan has too many items to delete atomically. Remove some items first, then retry.');
+  }
   const batchWrite = writeBatch(db);
+  items.docs.forEach((item) => batchWrite.delete(item.ref));
   batchWrite.delete(doc(db, 'farms', params.farmId, 'carePlans', params.plan.id));
 
   const audit = buildAuditLogEntry({
