@@ -64,6 +64,7 @@ import {
   voidMortalityEntry,
 } from '../services/mortalityService.ts';
 import {
+  adjustApprovedProduction,
   approveEggProductionParent,
   createEggProduction,
   updateEggProduction,
@@ -1256,6 +1257,52 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
     setECracked(String(entry.crackedEggs));
     setEDamaged(String(entry.damagedEggs));
     setERemarks(entry.remarks);
+  };
+
+  const [adjustApprovedTarget, setAdjustApprovedTarget] = useState<EggProductionEntry | null>(null);
+  const [adjCrates, setAdjCrates] = useState('');
+  const [adjPieces, setAdjPieces] = useState('');
+  const [adjCracked, setAdjCracked] = useState('');
+  const [adjDamaged, setAdjDamaged] = useState('');
+  const [adjJustification, setAdjJustification] = useState('');
+  const [adjSubmitting, setAdjSubmitting] = useState(false);
+  const [adjError, setAdjError] = useState<string | null>(null);
+
+  const startAdjustApprovedEgg = (entry: EggProductionEntry) => {
+    setAdjError(null);
+    setAdjustApprovedTarget(entry);
+    setAdjCrates(String(entry.crates));
+    setAdjPieces(String(entry.pieces));
+    setAdjCracked(String(entry.crackedEggs));
+    setAdjDamaged(String(entry.damagedEggs));
+    setAdjJustification(entry.adjustmentJustification || '');
+  };
+
+  const handleAdjustApprovedSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adjustApprovedTarget) return;
+    setAdjError(null);
+    setAdjSubmitting(true);
+    try {
+      await adjustApprovedProduction({
+        farmId: farm.farmId,
+        entryId: adjustApprovedTarget.id,
+        adjustments: {
+          crates: Math.max(0, parseInt(adjCrates, 10) || 0),
+          pieces: Math.max(0, parseInt(adjPieces, 10) || 0),
+          crackedEggs: Math.max(0, parseInt(adjCracked, 10) || 0),
+          damagedEggs: Math.max(0, parseInt(adjDamaged, 10) || 0),
+        },
+        justification: adjJustification,
+        member,
+      });
+      setFeedback({ type: 'success', text: 'Approved production corrected by Owner.' });
+      setAdjustApprovedTarget(null);
+    } catch (err) {
+      setAdjError(formatUserFriendlyError(err));
+    } finally {
+      setAdjSubmitting(false);
+    }
   };
 
   const approveDailyProduction = async (entry: EggProductionEntry) => {
@@ -2701,6 +2748,11 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                             {e.status || (e.isVoided ? 'VOIDED' : 'APPROVED')}
                             {e.status === 'APPROVED' && e.approvedByName ? ` by ${e.approvedByName}` : ''}
                           </div>
+                          {e.adjustmentJustification && (
+                            <div className="mt-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-900 border border-amber-200" title={e.adjustmentJustification}>
+                              Owner corrected: {e.adjustmentJustification}
+                            </div>
+                          )}
                           {e.isVoided && (
                             <div className="text-[11px] font-medium text-red-700">
                               VOIDED: {e.voidReason}
@@ -2750,6 +2802,16 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                               )}
                             </div>
                           )}
+                          {!e.isVoided && e.status === 'APPROVED' && member.role === 'owner' && (
+                            <button
+                              type="button"
+                              onClick={() => startAdjustApprovedEgg(e)}
+                              className="rounded border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 shadow-xs"
+                              title="Correct this approved production entry as farm owner"
+                            >
+                              Adjust (Owner)
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -2786,12 +2848,15 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                     </div>
 
                     {e.remarks && <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded">"{e.remarks}"</p>}
+                    {e.adjustmentJustification && (
+                      <p className="text-[10px] text-amber-900 bg-amber-50 p-2 rounded border border-amber-200">Owner corrected: {e.adjustmentJustification}</p>
+                    )}
 
                     <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-[11px]">
                       <span className="text-slate-400 truncate">By: {e.createdByName}</span>
                       {!e.isVoided && (
                         <div className="flex items-center gap-2">
-                          {canEditProd && (
+                          {e.status === 'PENDING' && canEditProd && (
                             <button
                               type="button"
                               onClick={() => startEditEgg(e)}
@@ -2800,13 +2865,22 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                               Edit
                             </button>
                           )}
-                          {canDeleteProd && (
+                          {e.status === 'PENDING' && canDeleteProd && (
                             <button
                               type="button"
                               onClick={() => setVoidTarget({ kind: 'egg', item: e })}
                               className="rounded-lg border border-red-200 px-3 py-1.5 font-semibold text-red-700 hover:bg-red-50"
                             >
                               Void
+                            </button>
+                          )}
+                          {e.status === 'APPROVED' && member.role === 'owner' && (
+                            <button
+                              type="button"
+                              onClick={() => startAdjustApprovedEgg(e)}
+                              className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 font-semibold text-amber-900 hover:bg-amber-100"
+                            >
+                              Adjust (Owner)
                             </button>
                           )}
                         </div>
@@ -4015,6 +4089,145 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
                   className="rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-60"
                 >
                   {editSaving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* OWNER ADJUST APPROVED PRODUCTION MODAL */}
+      {adjustApprovedTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="max-h-[92vh] sm:max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl sm:rounded-xl border border-amber-300 bg-white p-4 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
+            <div className="flex items-center justify-between border-b border-amber-200 pb-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded">Owner Authorization</span>
+                <h2 className="text-lg font-bold text-slate-900 mt-1">Adjust Approved Production</h2>
+                <p className="text-xs text-slate-500">{adjustApprovedTarget.batchCodeSnapshot} · {adjustApprovedTarget.penNameSnapshot} ({formatIsoDateDisplay(adjustApprovedTarget.transactionDate)})</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdjustApprovedTarget(null)}
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAdjustApprovedSubmit} className="mt-4 space-y-4">
+              {adjError && (
+                <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {adjError}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs text-amber-900">
+                <p className="font-semibold">Important:</p>
+                <p className="mt-0.5">This entry has already been approved. Adjustments are restricted to the Farm Owner and will update flock production metrics while recording a permanent audit entry.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="adj-crates" className="block text-xs font-medium text-slate-700">Crates (30 eggs/crate)</label>
+                  <input
+                    id="adj-crates"
+                    type="number"
+                    min="0"
+                    value={adjCrates}
+                    onChange={(e) => setAdjCrates(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="adj-pieces" className="block text-xs font-medium text-slate-700">Loose Pieces</label>
+                  <input
+                    id="adj-pieces"
+                    type="number"
+                    min="0"
+                    value={adjPieces}
+                    onChange={(e) => setAdjPieces(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="adj-cracked" className="block text-xs font-medium text-slate-700">Cracked Eggs (pcs)</label>
+                  <input
+                    id="adj-cracked"
+                    type="number"
+                    min="0"
+                    value={adjCracked}
+                    onChange={(e) => setAdjCracked(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="adj-damaged" className="block text-xs font-medium text-slate-700">Damaged Eggs (pcs)</label>
+                  <input
+                    id="adj-damaged"
+                    type="number"
+                    min="0"
+                    value={adjDamaged}
+                    onChange={(e) => setAdjDamaged(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600">
+                <span className="font-semibold text-slate-900">New Total:</span>{' '}
+                {formatEggCountInCrates(
+                  (Math.max(0, parseInt(adjCrates, 10) || 0) * 30) +
+                  Math.max(0, parseInt(adjPieces, 10) || 0) +
+                  Math.max(0, parseInt(adjCracked, 10) || 0) +
+                  Math.max(0, parseInt(adjDamaged, 10) || 0)
+                )}
+                {' '}({
+                  ((Math.max(0, parseInt(adjCrates, 10) || 0) * 30) +
+                  Math.max(0, parseInt(adjPieces, 10) || 0) +
+                  Math.max(0, parseInt(adjCracked, 10) || 0) +
+                  Math.max(0, parseInt(adjDamaged, 10) || 0)).toLocaleString()
+                } total eggs)
+              </div>
+
+              <div>
+                <label htmlFor="adj-justification" className="block text-xs font-medium text-slate-700">
+                  Correction Justification <span className="text-red-600">*</span>
+                </label>
+                <textarea
+                  id="adj-justification"
+                  rows={2}
+                  required
+                  minLength={3}
+                  maxLength={500}
+                  placeholder="Reason for owner correction (e.g., miscounted crate in evening session)"
+                  value={adjJustification}
+                  onChange={(e) => setAdjJustification(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setAdjustApprovedTarget(null)}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={adjSubmitting || adjJustification.trim().length < 3}
+                  className="rounded-lg bg-amber-800 px-4 py-2 text-sm font-medium text-white hover:bg-amber-900 disabled:opacity-60 shadow-xs"
+                >
+                  {adjSubmitting ? 'Saving Correction...' : 'Save Owner Correction'}
                 </button>
               </div>
             </form>

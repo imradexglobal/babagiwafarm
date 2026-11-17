@@ -30,6 +30,7 @@ export async function createEggSale(params: {
   canOverridePrice: boolean;
   overrideReason: string;
   paymentStatus: PaymentStatus;
+  receivedAmountNgn?: number;
   batch?: PoultryBatch | null;
   remarks: string;
   actorUid: string;
@@ -55,6 +56,7 @@ export async function createEggSale(params: {
 
   const totalEggsEquivalent = Math.round(params.quantity * params.salesUnit.eggCountPerUnit * 100) / 100;
   const totalAmountNgn = Math.round(params.quantity * normalizedUnitPrice * 100) / 100;
+  const receivedAmountNgn = Math.min(totalAmountNgn, Math.max(0, params.receivedAmountNgn ?? (params.paymentStatus === 'paid' ? totalAmountNgn : 0)));
   const batchId = params.batch?.id || '';
   const batchCodeSnapshot = params.batch?.batchCode || '';
 
@@ -78,6 +80,8 @@ export async function createEggSale(params: {
     overrideReason: priceOverridden ? params.overrideReason.trim().slice(0, 300) : '',
     totalAmountNgn,
     paymentStatus: params.paymentStatus,
+    receivedAmountNgn,
+    balanceDueNgn: Math.round((totalAmountNgn - receivedAmountNgn) * 100) / 100,
     batchId,
     batchCodeSnapshot,
     remarks: params.remarks.trim().slice(0, 500),
@@ -134,6 +138,7 @@ export async function updateEggSale(params: {
   canOverridePrice: boolean;
   overrideReason: string;
   paymentStatus: PaymentStatus;
+  receivedAmountNgn?: number;
   batch?: PoultryBatch | null;
   remarks: string;
   actorUid: string;
@@ -156,6 +161,11 @@ export async function updateEggSale(params: {
 
   const totalEggsEquivalent = Math.round(params.quantity * params.sale.eggsPerUnitSnapshot * 100) / 100;
   const totalAmountNgn = Math.round(params.quantity * normalizedPrice * 100) / 100;
+  const receivedAmountNgn = Math.min(totalAmountNgn, Math.max(0, params.receivedAmountNgn ?? (params.paymentStatus === 'paid'
+    ? totalAmountNgn
+    : params.paymentStatus === 'pending'
+      ? 0
+      : Math.min(params.sale.receivedAmountNgn || 0, totalAmountNgn))));
   const batchId = params.batch?.id || '';
   const batchCodeSnapshot = params.batch?.batchCode || '';
 
@@ -174,6 +184,8 @@ export async function updateEggSale(params: {
       : params.sale.overrideReason,
     totalAmountNgn,
     paymentStatus: params.paymentStatus,
+    receivedAmountNgn,
+    balanceDueNgn: Math.round((totalAmountNgn - receivedAmountNgn) * 100) / 100,
     batchId,
     batchCodeSnapshot,
     remarks: params.remarks.trim().slice(0, 500),
@@ -207,6 +219,42 @@ export async function updateEggSale(params: {
     actorName: params.actorName,
   });
   batchWrite.set(audit.ref, audit.data);
+
+  const linkedSaleMovement = (await getDocs(query(
+    collection(db, 'farms', params.farmId, 'eggInventoryMovements'),
+    where('reference', '==', params.sale.id)
+  ))).docs.map((d) => d.data() as EggInventoryMovement).find((movement) => movement.movementType === 'sale' && movement.quantityDelta < 0);
+  if (linkedSaleMovement) {
+    if (params.eggCategory !== params.sale.eggCategory) throw new Error('The egg grade cannot be changed on a true-inventory sale. Void and recreate the sale.');
+    const saleRef = doc(db, 'farms', params.farmId, 'eggSales', params.sale.id);
+    const balanceRef = doc(db, 'farms', params.farmId, 'eggInventoryBalances', linkedSaleMovement.balanceId);
+    const settingsRef = doc(db, 'farms', params.farmId, 'eggStoreSettings', 'current');
+    const movementId = generateId('mv');
+    const movementRef = doc(db, 'farms', params.farmId, 'eggInventoryMovements', movementId);
+    const previousEggs = params.sale.totalEggsEquivalent ?? params.sale.quantity * params.sale.eggsPerUnitSnapshot;
+    const delta = Math.round((previousEggs - totalEggsEquivalent) * 100) / 100;
+    try {
+      await runTransaction(db, async (tx) => {
+        const [saleSnap, balanceSnap, settingsSnap] = await Promise.all([tx.get(saleRef), tx.get(balanceRef), tx.get(settingsRef)]);
+        if (!saleSnap.exists() || !balanceSnap.exists()) throw new Error('The sale or its stock lot no longer exists.');
+        if (!settingsSnap.exists() || (settingsSnap.data() as EggStoreSettings).salesMode !== 'true_inventory') throw new Error('True Egg Sales mode is no longer enabled.');
+        const currentSale = saleSnap.data() as EggSale;
+        const balance = balanceSnap.data() as EggInventoryBalance;
+        if ((currentSale.totalEggsEquivalent ?? currentSale.quantity * currentSale.eggsPerUnitSnapshot) !== previousEggs) throw new Error('This sale changed elsewhere. Refresh and retry.');
+        if (delta !== 0) validateInventoryDelta(balance.balanceEggs, delta, balance.category);
+        tx.update(saleRef, updates);
+        if (delta !== 0) {
+          tx.update(balanceRef, { balanceEggs: balance.balanceEggs + delta, lastMovementId: movementId, updatedAt: serverTimestamp() });
+          tx.set(movementRef, { ...linkedSaleMovement, id: movementId, movementType: 'adjustment', quantityDelta: delta, reference: params.sale.id, transactionDate: params.transactionDate, reason: 'Sale edited', remarks: `Sale quantity adjusted from ${previousEggs} to ${totalEggsEquivalent} eggs.`, actorUid: params.actorUid, actorName: params.actorName.slice(0, 150), createdAt: serverTimestamp() });
+        }
+        tx.set(audit.ref, audit.data);
+      });
+      return;
+    } catch (err) {
+      if (err instanceof Error && /stock|True Egg|changed elsewhere|grade|Insufficient/.test(err.message)) throw err;
+      handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/eggSales/${params.sale.id}`);
+    }
+  }
 
   try {
     await batchWrite.commit();
@@ -417,6 +465,7 @@ export async function createTrueInventoryEggSale(params: {
   canOverridePrice: boolean;
   overrideReason: string;
   paymentStatus: PaymentStatus;
+  receivedAmountNgn?: number;
   batch?: PoultryBatch | null;
   remarks: string;
   actorUid: string;
@@ -436,6 +485,7 @@ export async function createTrueInventoryEggSale(params: {
   if (!Number.isInteger(totalEggsEquivalent)) throw new Error('This selling quantity does not convert to a whole number of eggs.');
   if (params.balance.category !== params.eggCategory) throw new Error(`Select the ${params.balance.category} stock lot for this sale.`);
   const totalAmountNgn = Math.round(params.quantity * normalizedUnitPrice * 100) / 100;
+  const receivedAmountNgn = params.paymentStatus === 'paid' ? totalAmountNgn : 0;
   const id = generateId('sale');
   const movementId = generateId('mv');
   const saleRef = doc(db, 'farms', params.farmId, 'eggSales', id);
@@ -453,7 +503,8 @@ export async function createTrueInventoryEggSale(params: {
     quantity: params.quantity, totalEggsEquivalent, suggestedUnitPriceNgn,
     unitPriceNgn: normalizedUnitPrice, priceOverridden,
     overrideReason: priceOverridden ? params.overrideReason.trim().slice(0, 300) : '',
-    totalAmountNgn, paymentStatus: params.paymentStatus, batchId, batchCodeSnapshot,
+    totalAmountNgn, paymentStatus: params.paymentStatus, receivedAmountNgn,
+    balanceDueNgn: Math.round((totalAmountNgn - receivedAmountNgn) * 100) / 100, batchId, batchCodeSnapshot,
     remarks: params.remarks.trim().slice(0, 500), isVoided: false, voidReason: '', voidedBy: '',
     createdBy: params.actorUid, createdByName: params.actorName.slice(0, 150),
     updatedBy: params.actorUid, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),

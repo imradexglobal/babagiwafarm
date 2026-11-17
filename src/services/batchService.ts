@@ -9,7 +9,7 @@ import {
 } from 'firebase/firestore';
 import { generateId, toCodeKey } from '../domain/calculations.ts';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
-import type { Pen, PoultryBatch } from '../types/farm.ts';
+import type { FarmMember, Pen, PoultryBatch } from '../types/farm.ts';
 import { buildAuditLogEntry } from './auditHelper.ts';
 
 export async function createBatch(params: {
@@ -286,6 +286,51 @@ export async function deactivateBatch(params: {
       tx.set(audit.ref, audit.data);
     });
   } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/batches/${params.batch.id}`);
+  }
+}
+
+export async function closeoutBatch(params: {
+  farmId: string;
+  batch: PoultryBatch;
+  closedDate: string;
+  finalLiveBirdCount: number;
+  closeoutReason: NonNullable<PoultryBatch['closeoutReason']>;
+  averageBirdWeightKg: number;
+  summary: NonNullable<PoultryBatch['closeoutSummary']>;
+  member: FarmMember;
+}): Promise<void> {
+  if (params.member.role !== 'owner') throw new Error('Only the farm owner can close out a flock.');
+  if (params.batch.status !== 'active') throw new Error('Only an active flock can be closed out.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.closedDate)) throw new Error('Enter a valid closeout date.');
+  if (!Number.isInteger(params.finalLiveBirdCount) || params.finalLiveBirdCount < 0 || params.finalLiveBirdCount > params.batch.initialCount) throw new Error('Final live bird count must be between zero and the initial flock count.');
+  if (!Number.isFinite(params.averageBirdWeightKg) || params.averageBirdWeightKg < 0 || params.averageBirdWeightKg > 100) throw new Error('Average live bird weight must be a valid value from 0 to 100 kg.');
+
+  const batchRef = doc(db, 'farms', params.farmId, 'batches', params.batch.id);
+  const penRef = doc(db, 'farms', params.farmId, 'pens', params.batch.penId);
+  try {
+    await runTransaction(db, async (tx) => {
+      const [batchSnap, penSnap] = await Promise.all([tx.get(batchRef), tx.get(penRef)]);
+      if (!batchSnap.exists()) throw new Error('The flock no longer exists.');
+      const current = batchSnap.data() as PoultryBatch;
+      if (current.status !== 'active') throw new Error('This flock has already been closed or deactivated.');
+      const audit = buildAuditLogEntry({
+        farmId: params.farmId, entityType: 'batch', entityId: params.batch.id, action: 'status_change',
+        summary: `Closed out flock ${current.batchCode} (${params.closeoutReason})`,
+        before: { status: current.status },
+        after: { status: 'inactive', closedDate: params.closedDate, finalLiveBirdCount: params.finalLiveBirdCount, closeoutReason: params.closeoutReason, averageBirdWeightKg: params.averageBirdWeightKg, ...params.summary },
+        actorUid: params.member.uid, actorName: params.member.displayName,
+      });
+      tx.update(batchRef, {
+        status: 'inactive', closedDate: params.closedDate, finalLiveBirdCount: params.finalLiveBirdCount,
+        closeoutReason: params.closeoutReason, averageBirdWeightKg: params.averageBirdWeightKg,
+        closeoutSummary: params.summary, updatedBy: params.member.uid, updatedAt: serverTimestamp(),
+      });
+      if (penSnap.exists() && (penSnap.data() as Pen).activeBatchId === current.id) tx.update(penRef, { activeBatchId: '', updatedAt: serverTimestamp() });
+      tx.set(audit.ref, audit.data);
+    });
+  } catch (err) {
+    if (err instanceof Error && /Only the farm owner|active flock|valid closeout|Final live|Average live|no longer exists|already been closed/.test(err.message)) throw err;
     handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/batches/${params.batch.id}`);
   }
 }

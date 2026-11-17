@@ -6,7 +6,6 @@ import {
   orderBy,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';

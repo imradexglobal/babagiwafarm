@@ -204,6 +204,22 @@ export interface PoultryBatch {
   femaleCount: number;
   remarks: string;
   status: 'active' | 'inactive';
+  closedDate?: string;
+  finalLiveBirdCount?: number;
+  closeoutReason?: 'spent_sold' | 'culled' | 'transferred' | 'disease_depopulation';
+  averageBirdWeightKg?: number;
+  closeoutSummary?: {
+    totalIntactEggs: number;
+    totalFeedKg: number;
+    totalMortality: number;
+    mortalityRatePct: number;
+    totalRevenueNgn: number;
+    totalExpenseNgn: number;
+    netProfitNgn: number;
+    costPerEggNgn: number;
+    costPerKgBodyWeightNgn: number;
+    lifetimeFcr: number;
+  };
   createdBy: string;
   createdByName: string;
   updatedBy: string;
@@ -243,6 +259,7 @@ export interface EggProductionEntry {
   approvedByName?: string;
   approvedAt?: unknown;
   approvalAuditId?: string;
+  adjustmentJustification?: string;
 }
 
 export type ProductionStatus = 'PENDING' | 'APPROVED' | 'VOIDED';
@@ -345,6 +362,8 @@ export interface EggSale {
   overrideReason: string;
   totalAmountNgn: number;
   paymentStatus: PaymentStatus;
+  receivedAmountNgn?: number;
+  balanceDueNgn?: number;
   batchId?: string;
   batchCodeSnapshot?: string;
   remarks: string;

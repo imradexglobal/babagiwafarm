@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BarChart3,
+  Bell,
   Sprout,
   ClipboardList,
   Cloud,
@@ -16,6 +17,8 @@ import {
   Users,
   WifiOff,
   X,
+  Waves,
+  HeartPulse,
 } from 'lucide-react';
 import { hasDepartmentAccess, hasPermission } from '../domain/calculations.ts';
 import type { FirebaseSyncState } from '../lib/firebaseSync.ts';
@@ -23,6 +26,9 @@ import type { Farm, FarmMember } from '../types/farm.ts';
 
 export type NavSection =
   | 'dashboard'
+  | 'fishery'
+  | 'crops'
+  | 'livestock'
   | 'production'
   | 'eggStore'
   | 'purchases'
@@ -39,6 +45,8 @@ interface AppShellProps {
   syncState?: FirebaseSyncState;
   onSelectSection: (section: NavSection) => void;
   onSignOut: () => Promise<void>;
+  pendingProductionCount?: number;
+  dueReminderCount?: number;
   children: React.ReactNode;
 }
 
@@ -49,9 +57,21 @@ export const AppShell: React.FC<AppShellProps> = ({
   syncState = 'synced',
   onSelectSection,
   onSignOut,
+  pendingProductionCount = 0,
+  dueReminderCount = 0,
   children,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+
+  useEffect(() => {
+    if (dueReminderCount < 1 || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const today = new Date().toISOString().slice(0, 10);
+    const key = `babagiwa-reminder-notification:${farm.farmId}:${today}:${dueReminderCount}`;
+    if (sessionStorage.getItem(key)) return;
+    new Notification('Babagiwa Farm Reminder', { body: `${dueReminderCount} due or overdue reminder${dueReminderCount === 1 ? '' : 's'} need attention.` });
+    sessionStorage.setItem(key, 'sent');
+  }, [dueReminderCount, farm.farmId]);
 
   const navItems: {
     id: NavSection;
@@ -61,6 +81,9 @@ export const AppShell: React.FC<AppShellProps> = ({
     group: 'operations' | 'management';
   }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3, visible: true, group: 'operations' },
+    { id: 'fishery', label: 'Fishery', icon: Waves, visible: hasDepartmentAccess(member, 'fishery'), group: 'operations' },
+    { id: 'crops', label: 'Crops', icon: Sprout, visible: hasDepartmentAccess(member, 'crops'), group: 'operations' },
+    { id: 'livestock', label: 'Livestock', icon: HeartPulse, visible: hasDepartmentAccess(member, 'livestock'), group: 'operations' },
     {
       id: 'production',
       label: 'Daily Records',
@@ -205,6 +228,7 @@ export const AppShell: React.FC<AppShellProps> = ({
                 {active && (
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden="true" />
                 )}
+                {item.id === 'production' && pendingProductionCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">{pendingProductionCount}</span>}
               </button>
             );
           })}
@@ -417,6 +441,16 @@ export const AppShell: React.FC<AppShellProps> = ({
                   <span className="hidden xs:inline">Synced</span>
                 </>
               )}
+            </div>
+            <div className="relative">
+              <button type="button" aria-label={`Open alerts${dueReminderCount ? `, ${dueReminderCount} due` : ''}`} onClick={async () => {
+                setAlertsOpen((open) => !open);
+                if (typeof Notification !== 'undefined' && Notification.permission === 'default') await Notification.requestPermission();
+              }} className="relative rounded-xl border border-stone-200 bg-white p-2 text-emerald-900 hover:bg-emerald-50">
+                <Bell className="h-4 w-4" />
+                {(dueReminderCount > 0 || pendingProductionCount > 0) && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-amber-500 px-1 text-[9px] font-bold leading-4 text-white">{Math.min(99, dueReminderCount + pendingProductionCount)}</span>}
+              </button>
+              {alertsOpen && <div className="absolute right-0 top-11 z-50 w-72 rounded-xl border border-stone-200 bg-white p-4 shadow-xl"><p className="font-semibold text-stone-900">Farm alerts</p><p className="mt-2 text-sm text-stone-600">{dueReminderCount} due or overdue reminders · {pendingProductionCount} daily records awaiting review</p><button type="button" onClick={() => { setAlertsOpen(false); onSelectSection('production'); }} className="mt-3 w-full rounded-lg bg-emerald-800 px-3 py-2 text-sm font-semibold text-white">Open Daily Records</button></div>}
             </div>
             <span className="hidden sm:inline h-3.5 w-px bg-slate-200" aria-hidden="true" />
             <span className="hidden sm:inline font-mono">{farm.timezone}</span>

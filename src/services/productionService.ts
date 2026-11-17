@@ -105,6 +105,52 @@ export async function voidEggProduction(params: { farmId: string; entry: EggProd
   catch (err) { if (err instanceof Error && /pending|voided/.test(err.message)) throw err; handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/eggProduction/${params.entry.id}`); }
 }
 
+export async function adjustApprovedProduction(params: {
+  farmId: string;
+  entryId: string;
+  adjustments: Partial<Pick<EggProductionEntry, 'crates' | 'pieces' | 'crackedEggs' | 'damagedEggs'>>;
+  justification: string;
+  member: FarmMember;
+}): Promise<void> {
+  if (params.member.role !== 'owner') throw new Error('Only the farm owner can adjust approved production');
+  const justification = params.justification.trim().slice(0, 500);
+  if (justification.length < 3) throw new Error('A correction justification of at least 3 characters is required.');
+  const ref = productionRef(params.farmId, params.entryId);
+  const audit = buildAuditLogEntry({
+    farmId: params.farmId,
+    entityType: 'eggProduction',
+    entityId: params.entryId,
+    action: 'update',
+    summary: `Owner corrected approved production: ${justification}`,
+    before: {},
+    after: { adjustmentJustification: justification, adjustments: params.adjustments },
+    actorUid: params.member.uid,
+    actorName: params.member.displayName,
+  });
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('Production entry no longer exists.');
+      const current = normalize(snap.data());
+      if (current.status !== 'APPROVED' || current.isVoided) throw new Error('Only active approved production can be corrected.');
+      const crates = params.adjustments.crates ?? current.crates;
+      const pieces = params.adjustments.pieces ?? current.pieces;
+      const crackedEggs = params.adjustments.crackedEggs ?? current.crackedEggs;
+      const damagedEggs = params.adjustments.damagedEggs ?? current.damagedEggs;
+      const counts = validateCounts({ crates, pieces, crackedEggs, damagedEggs });
+      tx.update(ref, {
+        crates, pieces, intactEggs: counts.intactEggs, crackedEggs, damagedEggs,
+        totalEggs: counts.totalEggs, adjustmentJustification: justification,
+        updatedBy: params.member.uid, updatedAt: serverTimestamp(),
+      });
+      tx.set(audit.ref, audit.data);
+    });
+  } catch (err) {
+    if (err instanceof Error && /Only the farm owner|justification|approved|no longer exists|Egg counts/.test(err.message)) throw err;
+    handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/eggProduction/${params.entryId}`);
+  }
+}
+
 const normalize = (d: any): EggProductionEntry => ({ ...d, status: d.status || (d.isVoided ? 'VOIDED' : 'APPROVED') });
 export function subscribeEggProduction(farmId: string, onData: (entries: EggProductionEntry[]) => void, onError: (err: Error) => void, maxRecords = 500) {
   const q = query(collection(db, 'farms', farmId, 'eggProduction'), orderBy('transactionDate', 'desc'), limit(maxRecords));

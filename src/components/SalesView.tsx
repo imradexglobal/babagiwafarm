@@ -101,6 +101,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
   const [editUnitPriceNgn, setEditUnitPriceNgn] = useState('0');
   const [editOverrideReason, setEditOverrideReason] = useState('');
   const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('paid');
+  const [editReceivedAmountNgn, setEditReceivedAmountNgn] = useState('');
   const [editSelectedBatchId, setEditSelectedBatchId] = useState('');
   const [editRemarks, setEditRemarks] = useState('');
   const [editSubmitting, setEditSubmitting] = useState(false);
@@ -178,6 +179,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
     setEditUnitPriceNgn(String(s.unitPriceNgn));
     setEditOverrideReason(s.overrideReason);
     setEditPaymentStatus(s.paymentStatus);
+    setEditReceivedAmountNgn(s.receivedAmountNgn !== undefined ? String(s.receivedAmountNgn) : (s.paymentStatus === 'paid' ? String(s.totalAmountNgn) : '0'));
     setEditSelectedBatchId(s.batchId || '');
     setEditRemarks(s.remarks);
     setEditFormError(null);
@@ -192,6 +194,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
       const qty = Number(editQuantity);
       const price = Number(editUnitPriceNgn);
       const selectedBatch = editSelectedBatchId ? batchById.get(editSelectedBatchId) || null : null;
+      const totalAmountNgn = Math.round(qty * price * 100) / 100;
+      const receivedNgn = editPaymentStatus === 'paid'
+        ? totalAmountNgn
+        : editPaymentStatus === 'pending'
+        ? 0
+        : Math.min(totalAmountNgn, Math.max(0, Number(editReceivedAmountNgn) || 0));
       await updateEggSale({
         farmId: farm.farmId,
         sale: editingSale,
@@ -204,6 +212,7 @@ export const SalesView: React.FC<SalesViewProps> = ({
         canOverridePrice,
         overrideReason: editOverrideReason,
         paymentStatus: editPaymentStatus,
+        receivedAmountNgn: receivedNgn,
         batch: selectedBatch,
         remarks: editRemarks,
         actorUid: member.uid,
@@ -614,7 +623,12 @@ export const SalesView: React.FC<SalesViewProps> = ({
                         )}
                       </td>
                       <td className="px-4 py-3 text-right font-mono font-semibold text-emerald-800">
-                        {formatNgn(s.totalAmountNgn)}
+                        <div>{formatNgn(s.totalAmountNgn)}</div>
+                        {s.balanceDueNgn !== undefined && s.balanceDueNgn > 0 ? (
+                          <div className="text-[10px] font-medium text-amber-700">Due: {formatNgn(s.balanceDueNgn)}</div>
+                        ) : s.receivedAmountNgn !== undefined && s.receivedAmountNgn > 0 && s.paymentStatus !== 'paid' ? (
+                          <div className="text-[10px] text-slate-500">Paid: {formatNgn(s.receivedAmountNgn)}</div>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -826,6 +840,28 @@ export const SalesView: React.FC<SalesViewProps> = ({
                   </select>
                 </div>
               </div>
+
+              {editPaymentStatus === 'partial' && (
+                <div>
+                  <label htmlFor="edit-sale-received" className="block text-xs font-medium text-slate-700">
+                    Received Amount (₦)
+                  </label>
+                  <input
+                    id="edit-sale-received"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={Number(editQuantity) * Number(editUnitPriceNgn)}
+                    value={editReceivedAmountNgn}
+                    onChange={(e) => setEditReceivedAmountNgn(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                    placeholder="Amount collected so far"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Remaining balance: {formatNgn(Math.max(0, (Number(editQuantity) * Number(editUnitPriceNgn)) - (Number(editReceivedAmountNgn) || 0)))}
+                  </p>
+                </div>
+              )}
 
               {canOverridePrice && (
                 <div>

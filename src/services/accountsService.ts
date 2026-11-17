@@ -320,6 +320,13 @@ export async function createSalesInvoice(params: {
         const line = params.lines[idx];
         const invoiceLine = invoiceLines[idx];
         const saleRef = doc(db, ...root(params.farmId), 'eggSales', invoiceLine.eggSaleId);
+        const lineTotalAmountNgn = invoiceLine.totalAmountNgn;
+        const lineReceivedNgn = params.paymentStatus === 'paid'
+          ? lineTotalAmountNgn
+          : params.paymentStatus === 'unpaid'
+          ? 0
+          : Math.min(lineTotalAmountNgn, Math.round((paidAmountNgn * (totalAmountNgn > 0 ? lineTotalAmountNgn / totalAmountNgn : 0)) * 100) / 100);
+        const lineBalanceNgn = Math.round((lineTotalAmountNgn - lineReceivedNgn) * 100) / 100;
         const saleData = {
           id: invoiceLine.eggSaleId,
           farmId: params.farmId,
@@ -336,8 +343,10 @@ export async function createSalesInvoice(params: {
           unitPriceNgn: line.unitPriceNgn,
           priceOverridden: line.priceOverridden,
           overrideReason: line.overrideReason || '',
-          totalAmountNgn: invoiceLine.totalAmountNgn,
+          totalAmountNgn: lineTotalAmountNgn,
           paymentStatus: params.paymentStatus,
+          receivedAmountNgn: lineReceivedNgn,
+          balanceDueNgn: lineBalanceNgn,
           batchId: line.batch?.id || '',
           batchCodeSnapshot: line.batch?.batchCode || '',
           remarks: `Invoice ${invoiceNumber}: ${line.remarks || ''}`.trim().slice(0, 500),

@@ -3,7 +3,10 @@ import { onAuthStateChanged, type User } from 'firebase/auth';
 import { AppShell, type NavSection } from './components/AppShell.tsx';
 import { AccountsView } from './components/AccountsView.tsx';
 import { BatchesView } from './components/BatchesView.tsx';
+import { CropsView } from './components/CropsView.tsx';
 import { EggStoreView } from './components/EggStoreView.tsx';
+import { FisheryView } from './components/FisheryView.tsx';
+import { LivestockView } from './components/LivestockView.tsx';
 import { DailyProductionView, type DailyProductionSubTab } from './components/DailyProductionView.tsx';
 import { DashboardView } from './components/DashboardView.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
@@ -12,7 +15,7 @@ import { PurchasesView } from './components/PurchasesView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
 import { SalesView } from './components/SalesView.tsx';
 import { SettingsView } from './components/SettingsView.tsx';
-import { hasPermission } from './domain/calculations.ts';
+import { formatDateInTimezone, hasPermission } from './domain/calculations.ts';
 import { useFirebaseSyncStatus } from './hooks/useFirebaseSyncStatus.ts';
 import { auth, formatUserFriendlyError } from './lib/firebase.ts';
 import { Building2, RefreshCw } from 'lucide-react';
@@ -612,6 +615,12 @@ export default function App() {
       member={member}
       activeSection={activeSection}
       syncState={syncState}
+      pendingProductionCount={new Set(production.filter((entry) => entry.status === 'PENDING' && !entry.isVoided).map((entry) => entry.parentId || entry.id)).size}
+      dueReminderCount={farmReminders.filter((reminder) => {
+        const batch = batches.find((item) => item.id === reminder.batchId);
+        const assigned = member.role === 'owner' || !member.assignedPenIds?.length || member.assignedPenIds.includes(reminder.penId);
+        return assigned && batch?.status === 'active' && reminder.status === 'pending' && reminder.dueDate <= formatDateInTimezone(new Date(), farm.timezone);
+      }).length}
       onSelectSection={handleSelectSection}
       onSignOut={handleSignOut}
     >
@@ -640,6 +649,10 @@ export default function App() {
           onNavigate={handleSelectSection}
         />
       )}
+
+      {activeSection === 'fishery' && <FisheryView />}
+      {activeSection === 'crops' && <CropsView />}
+      {activeSection === 'livestock' && <LivestockView />}
 
       {activeSection === 'production' && (
         <DailyProductionView

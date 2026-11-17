@@ -493,7 +493,7 @@ service cloud.firestore {
 
     function isValidBatch(d, farmId, batchId) {
       return d.keys().hasAll(['id', 'farmId', 'batchCode', 'penId', 'penNameSnapshot', 'birdType', 'breed', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
-        && d.keys().hasOnly(['id', 'farmId', 'batchCode', 'penId', 'penNameSnapshot', 'birdType', 'breed', 'strain', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'assignedCarePlanIds', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'batchCode', 'penId', 'penNameSnapshot', 'birdType', 'breed', 'strain', 'source', 'hatchDate', 'ageAtPlacementDays', 'placementDate', 'initialCount', 'maleCount', 'femaleCount', 'remarks', 'status', 'assignedCarePlanIds', 'closedDate', 'finalLiveBirdCount', 'closeoutReason', 'averageBirdWeightKg', 'closeoutSummary', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
         && d.id == batchId
         && d.farmId == farmId
         && d.batchCode is string && d.batchCode.size() >= 1 && d.batchCode.size() <= 60
@@ -503,6 +503,11 @@ service cloud.firestore {
         && d.breed is string && d.breed.size() <= 80
         && (!('strain' in d) || (d.strain is string && d.strain.size() <= 80))
         && (!('assignedCarePlanIds' in d) || d.assignedCarePlanIds is list)
+        && (!('closedDate' in d) || isValidDateStr(d.closedDate))
+        && (!('finalLiveBirdCount' in d) || (d.finalLiveBirdCount is int && d.finalLiveBirdCount >= 0 && d.finalLiveBirdCount <= d.initialCount))
+        && (!('closeoutReason' in d) || d.closeoutReason in ['spent_sold', 'culled', 'transferred', 'disease_depopulation'])
+        && (!('averageBirdWeightKg' in d) || (d.averageBirdWeightKg is number && d.averageBirdWeightKg >= 0 && d.averageBirdWeightKg <= 100))
+        && (!('closeoutSummary' in d) || d.closeoutSummary is map)
         && d.source is string && d.source.size() <= 120
         && isValidOptionalDateStr(d.hatchDate)
         && d.ageAtPlacementDays is int && d.ageAtPlacementDays >= 0 && d.ageAtPlacementDays <= 2000
@@ -614,7 +619,7 @@ function isValidEggProduction(d, farmId, entryId) {
 
     function isValidEggSale(d, farmId, saleId) {
       return d.keys().hasAll(['id', 'farmId', 'transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'salesUnitId', 'unitNameSnapshot', 'eggsPerUnitSnapshot', 'quantity', 'totalEggsEquivalent', 'suggestedUnitPriceNgn', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
-        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'salesUnitId', 'unitNameSnapshot', 'eggsPerUnitSnapshot', 'quantity', 'totalEggsEquivalent', 'suggestedUnitPriceNgn', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'batchId', 'batchCodeSnapshot', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'salesUnitId', 'unitNameSnapshot', 'eggsPerUnitSnapshot', 'quantity', 'totalEggsEquivalent', 'suggestedUnitPriceNgn', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'receivedAmountNgn', 'balanceDueNgn', 'batchId', 'batchCodeSnapshot', 'remarks', 'isVoided', 'voidReason', 'voidedBy', 'createdBy', 'createdByName', 'updatedBy', 'createdAt', 'updatedAt'])
         && d.id == saleId
         && d.farmId == farmId
         && isValidDateStr(d.transactionDate)
@@ -631,6 +636,7 @@ function isValidEggProduction(d, farmId, entryId) {
         && d.priceOverridden is bool
         && d.overrideReason is string && d.overrideReason.size() <= 300
         && d.totalAmountNgn is number && d.totalAmountNgn >= 0
+        && ((!('receivedAmountNgn' in d) && !('balanceDueNgn' in d)) || ('receivedAmountNgn' in d && 'balanceDueNgn' in d && d.receivedAmountNgn is number && d.receivedAmountNgn >= 0 && d.receivedAmountNgn <= d.totalAmountNgn && d.balanceDueNgn is number && d.balanceDueNgn >= 0 && d.balanceDueNgn == d.totalAmountNgn - d.receivedAmountNgn))
         && d.paymentStatus in ['paid', 'pending', 'partial']
         && (!('batchId' in d) || (d.batchId is string && d.batchId.size() <= 128))
         && (!('batchCodeSnapshot' in d) || (d.batchCodeSnapshot is string && d.batchCodeSnapshot.size() <= 60))
@@ -1226,6 +1232,12 @@ function isValidEggProduction(d, farmId, entryId) {
               hasCrudPerm(farmId, 'batches', 'delete')
               && incoming().status == 'inactive'
               && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              isFarmOwner(farmId)
+              && existing().status == 'active'
+              && incoming().status == 'inactive'
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'closedDate', 'finalLiveBirdCount', 'closeoutReason', 'averageBirdWeightKg', 'closeoutSummary', 'updatedBy', 'updatedAt'])
             )
           );
         allow delete: if false;
@@ -1252,7 +1264,7 @@ function isValidEggProduction(d, farmId, entryId) {
         allow update: if isValidId(farmId)
       && isValidId(entryId)
       && existing().isVoided == false
-      && existing().status == 'PENDING'
+      && (existing().status == 'PENDING' || isFarmOwner(farmId))
       && incoming().id == existing().id
           && incoming().farmId == existing().farmId
           && incoming().createdBy == existing().createdBy
@@ -1281,6 +1293,15 @@ function isValidEggProduction(d, farmId, entryId) {
               && incoming().status == 'APPROVED'
               && incoming().approvedBy == request.auth.uid
               && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedBy', 'approvedByName', 'approvedAt', 'approvalAuditId', 'updatedBy', 'updatedAt'])
+            ) ||
+            (
+              isFarmOwner(farmId)
+              && existing().status == 'APPROVED'
+              && incoming().status == 'APPROVED'
+              && incoming().adjustmentJustification is string
+              && incoming().adjustmentJustification.size() >= 3
+              && incoming().adjustmentJustification.size() <= 500
+              && incoming().diff(existing()).affectedKeys().hasOnly(['crates', 'pieces', 'intactEggs', 'crackedEggs', 'damagedEggs', 'totalEggs', 'adjustmentJustification', 'updatedBy', 'updatedAt'])
             )
           );
         allow delete: if false;
@@ -1436,7 +1457,7 @@ function isValidEggProduction(d, farmId, entryId) {
                 (incoming().unitPriceNgn == existing().unitPriceNgn && incoming().priceOverridden == existing().priceOverridden) ||
                 canOverrideSalesPrice(farmId)
               )
-              && incoming().diff(existing()).affectedKeys().hasOnly(['transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'quantity', 'totalEggsEquivalent', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'batchId', 'batchCodeSnapshot', 'remarks', 'updatedBy', 'updatedAt'])
+              && incoming().diff(existing()).affectedKeys().hasOnly(['transactionDate', 'transactionTime', 'customerName', 'eggCategory', 'quantity', 'totalEggsEquivalent', 'unitPriceNgn', 'priceOverridden', 'overrideReason', 'totalAmountNgn', 'paymentStatus', 'receivedAmountNgn', 'balanceDueNgn', 'batchId', 'batchCodeSnapshot', 'remarks', 'updatedBy', 'updatedAt'])
             ) ||
             (
               hasCrudPerm(farmId, 'sales', 'delete')
@@ -1927,7 +1948,14 @@ function isValidEggProduction(d, farmId, entryId) {
         allow list: if isValidId(farmId) && isEmailVerified() && canReadEggStore(farmId);
         allow create: if isValidId(farmId) && isValidId(movementId)
           && isValidEggInventoryMovement(incoming(), farmId, movementId)
-          && canPostEggMovement(farmId, incoming().movementType, incoming().quantityDelta)
+          && (canPostEggMovement(farmId, incoming().movementType, incoming().quantityDelta)
+            || (incoming().movementType == 'adjustment'
+              && incoming().reason == 'Sale edited'
+              && isValidId(incoming().reference)
+              && hasCrudPerm(farmId, 'sales', 'edit')
+              && exists(/databases/$(database)/documents/farms/$(farmId)/eggSales/$(incoming().reference))
+              && existsAfter(/databases/$(database)/documents/farms/$(farmId)/eggSales/$(incoming().reference))
+              && get(/databases/$(database)/documents/farms/$(farmId)/eggSales/$(incoming().reference)).data.totalEggsEquivalent - getAfter(/databases/$(database)/documents/farms/$(farmId)/eggSales/$(incoming().reference)).data.totalEggsEquivalent == incoming().quantityDelta))
           && incoming().actorUid == request.auth.uid && incoming().createdAt == request.time
           && existsAfter(/databases/$(database)/documents/farms/$(farmId)/eggInventoryBalances/$(incoming().balanceId))
           && getAfter(/databases/$(database)/documents/farms/$(farmId)/eggInventoryBalances/$(incoming().balanceId)).data.lastMovementId == movementId

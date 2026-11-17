@@ -127,8 +127,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError })
             <div className="lg:col-span-6">
               <div className="relative h-72 w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-200 lg:h-full lg:min-h-[380px]">
                 <img
-                  src="/src/assets/images/hero_poultry_farm_1794672435547.jpg"
-                  alt="Modern commercial poultry layer house at Babagiwa Farm during golden hour"
+                  src="/images/landing/nigerian-poultry-farm.jpg"
+                  alt="Well-managed Nigerian poultry layer house in warm morning light"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover"
                 />
@@ -216,8 +216,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError })
             <div className="lg:col-span-5">
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-200 aspect-[4/3]">
                 <img
-                  src="/src/assets/images/fresh_egg_crates_1794672435517.jpg"
-                  alt="Stacked 30-egg paper crates with fresh brown layer eggs in the grading room"
+                  src="/images/landing/nigerian-egg-grading.jpg"
+                  alt="Fresh brown eggs arranged in recycled-pulp crates at a Nigerian farm grading table"
                   referrerPolicy="no-referrer"
                   className="h-full w-full object-cover"
                 />

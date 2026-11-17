@@ -1,9 +1,13 @@
 import React, { useMemo, useState } from 'react';
-import { Calendar, Edit2, HeartPulse, Plus, PowerOff, RotateCcw, Search, X } from 'lucide-react';
+import { Award, Calendar, CheckCircle2, Edit2, FileText, HeartPulse, Plus, PowerOff, RotateCcw, Search, X } from 'lucide-react';
 import {
   calculateBatchFinancialSummaries,
   calculateBatchMortalityStats,
   calculateBirdAgeDays,
+  calculateCostPerEgg,
+  calculateCostPerKgBodyWeight,
+  calculateFeedConversionRatio,
+  calculateHenDayRate,
   formatBirdAge,
   formatDateInTimezone,
   formatEggCountInCrates,
@@ -13,7 +17,7 @@ import {
   hasPermission,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
-import { createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
+import { closeoutBatch, createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
 import { getCarePlanItemsForPlans } from '../services/carePlanService.ts';
 import { materializeCarePlanReminders } from '../services/remindersService.ts';
 import type {
@@ -120,6 +124,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingBatch, setEditingBatch] = useState<PoultryBatch | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<PoultryBatch | null>(null);
+  const [closeoutTarget, setCloseoutTarget] = useState<PoultryBatch | null>(null);
+  const [viewingCloseoutBatch, setViewingCloseoutBatch] = useState<PoultryBatch | null>(null);
+  const [closeoutDate, setCloseoutDate] = useState(todayStr);
+  const [closeoutLiveCount, setCloseoutLiveCount] = useState('');
+  const [closeoutReason, setCloseoutReason] = useState<NonNullable<PoultryBatch['closeoutReason']>>('spent_sold');
+  const [closeoutAvgWeight, setCloseoutAvgWeight] = useState('1.8');
+  const [closeoutSubmitting, setCloseoutSubmitting] = useState(false);
+  const [closeoutError, setCloseoutError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form fields
@@ -438,6 +450,84 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
     return { revenue, feedExpense, medicationExpense, otherDirectExpense, netProfit, marginPct };
   }, [filteredBatches, financialsMap]);
 
+  const openCloseoutModal = (b: PoultryBatch) => {
+    const mStats = mortalityStatsMap.get(b.id);
+    const live = mStats ? mStats.survivingBirds : b.initialCount;
+    setCloseoutTarget(b);
+    setCloseoutDate(todayStr);
+    setCloseoutLiveCount(String(live));
+    setCloseoutReason('spent_sold');
+    setCloseoutAvgWeight(b.birdType.toLowerCase().includes('broiler') ? '2.5' : '1.8');
+    setCloseoutError(null);
+  };
+
+  const handleCloseoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!closeoutTarget) return;
+    setCloseoutError(null);
+    setCloseoutSubmitting(true);
+    try {
+      const liveCount = parseInt(closeoutLiveCount, 10);
+      const avgWeight = parseFloat(closeoutAvgWeight);
+      const mStats = mortalityStatsMap.get(closeoutTarget.id) || {
+        initialCount: closeoutTarget.initialCount,
+        totalLosses: 0,
+        survivingBirds: liveCount,
+        mortalityRatePct: 0,
+        survivalRatePct: 100,
+        entryCount: 0,
+      };
+      const metrics = batchMetrics.get(closeoutTarget.id) || { eggs: 0, feedKg: 0 };
+      const fin = financialsMap.get(closeoutTarget.id) || {
+        batchId: closeoutTarget.id,
+        eggsProduced: metrics.eggs,
+        directSalesRevenueNgn: 0,
+        pooledSalesRevenueNgn: 0,
+        totalRevenueNgn: 0,
+        feedExpenseNgn: 0,
+        medicationExpenseNgn: 0,
+        directOtherExpenseNgn: 0,
+        totalExpenseNgn: 0,
+        netProfitNgn: 0,
+        profitMarginPct: 0,
+      };
+      const isBroiler = closeoutTarget.birdType.toLowerCase().includes('broiler');
+      const prodMetric = isBroiler ? liveCount * avgWeight : metrics.eggs;
+      const lifetimeFcr = calculateFeedConversionRatio(metrics.feedKg, prodMetric, isBroiler ? 'broiler' : 'layer');
+      const costPerEggNgn = calculateCostPerEgg(fin.totalExpenseNgn, metrics.eggs);
+      const costPerKgBodyWeightNgn = calculateCostPerKgBodyWeight(fin.totalExpenseNgn, liveCount, avgWeight);
+
+      await closeoutBatch({
+        farmId: farm.farmId,
+        batch: closeoutTarget,
+        closedDate: closeoutDate,
+        finalLiveBirdCount: liveCount,
+        closeoutReason,
+        averageBirdWeightKg: avgWeight,
+        summary: {
+          totalIntactEggs: metrics.eggs,
+          totalFeedKg: metrics.feedKg,
+          totalMortality: mStats.totalLosses,
+          mortalityRatePct: mStats.mortalityRatePct,
+          totalRevenueNgn: fin.totalRevenueNgn,
+          totalExpenseNgn: fin.totalExpenseNgn,
+          netProfitNgn: fin.netProfitNgn,
+          costPerEggNgn,
+          costPerKgBodyWeightNgn,
+          lifetimeFcr,
+        },
+        member,
+      });
+
+      setFeedback({ type: 'success', text: `Flock ${closeoutTarget.batchCode} successfully closed out and pen released.` });
+      setCloseoutTarget(null);
+    } catch (err) {
+      setCloseoutError(formatUserFriendlyError(err));
+    } finally {
+      setCloseoutSubmitting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -690,6 +780,32 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                       </div>
                     </div>
 
+                    {/* Poultry Industry KPIs */}
+                    <div className="grid grid-cols-3 gap-2 bg-emerald-50/60 rounded-lg p-2 text-xs border border-emerald-100">
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Cost / Egg</span>
+                        <span className="font-semibold text-emerald-950 font-mono">
+                          {metrics.eggs > 0 ? `₦${calculateCostPerEgg(fin.totalExpenseNgn, metrics.eggs).toFixed(1)}` : '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">FCR</span>
+                        <span className="font-semibold text-emerald-950 font-mono">
+                          {calculateFeedConversionRatio(metrics.feedKg, b.birdType.toLowerCase().includes('broiler') ? mStats.survivingBirds * (b.averageBirdWeightKg || 2.0) : metrics.eggs, b.birdType.toLowerCase().includes('broiler') ? 'broiler' : 'layer') > 0
+                            ? calculateFeedConversionRatio(metrics.feedKg, b.birdType.toLowerCase().includes('broiler') ? mStats.survivingBirds * (b.averageBirdWeightKg || 2.0) : metrics.eggs, b.birdType.toLowerCase().includes('broiler') ? 'broiler' : 'layer').toFixed(2)
+                            : '—'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">Cost / kg</span>
+                        <span className="font-semibold text-emerald-950 font-mono">
+                          {calculateCostPerKgBodyWeight(fin.totalExpenseNgn, mStats.survivingBirds, b.averageBirdWeightKg || 1.8) > 0
+                            ? `₦${calculateCostPerKgBodyWeight(fin.totalExpenseNgn, mStats.survivingBirds, b.averageBirdWeightKg || 1.8).toFixed(0)}`
+                            : '—'}
+                        </span>
+                      </div>
+                    </div>
+
                     <div className="flex items-center justify-between border-t border-slate-100 pt-2.5">
                       <button
                         type="button"
@@ -701,6 +817,28 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                       </button>
 
                       <div className="flex items-center gap-2">
+                        {b.status === 'active' && member.role === 'owner' && (
+                          <button
+                            type="button"
+                            onClick={() => openCloseoutModal(b)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                            title="Closeout flock"
+                          >
+                            <Award className="h-3.5 w-3.5" />
+                            <span>Closeout</span>
+                          </button>
+                        )}
+                        {b.closeoutSummary && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingCloseoutBatch(b)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            title="View closeout profitability summary"
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                            <span>Summary</span>
+                          </button>
+                        )}
                         {canEdit && (
                           <button
                             type="button"
@@ -873,13 +1011,26 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`font-medium ${
-                            b.status === 'active' ? 'text-emerald-800' : 'text-slate-500'
-                          }`}
-                        >
-                          {b.status === 'active' ? 'Active' : 'Inactive'}
-                        </span>
+                        <div>
+                          <span
+                            className={`font-medium ${
+                              b.status === 'active' ? 'text-emerald-800' : 'text-slate-500'
+                            }`}
+                          >
+                            {b.status === 'active' ? 'Active' : 'Inactive'}
+                          </span>
+                          {b.closeoutSummary && (
+                            <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                              Closed
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {metrics.eggs > 0 && <span>₦{calculateCostPerEgg(fin.totalExpenseNgn, metrics.eggs).toFixed(1)}/egg</span>}
+                          {calculateFeedConversionRatio(metrics.feedKg, b.birdType.toLowerCase().includes('broiler') ? mStats.survivingBirds * (b.averageBirdWeightKg || 2.0) : metrics.eggs, b.birdType.toLowerCase().includes('broiler') ? 'broiler' : 'layer') > 0 && (
+                            <span className="ml-1 font-mono">FCR: {calculateFeedConversionRatio(metrics.feedKg, b.birdType.toLowerCase().includes('broiler') ? mStats.survivingBirds * (b.averageBirdWeightKg || 2.0) : metrics.eggs, b.birdType.toLowerCase().includes('broiler') ? 'broiler' : 'layer').toFixed(2)}</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="inline-flex items-center gap-1.5">
@@ -900,6 +1051,26 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                               {canLogMortality && b.status === 'active' ? 'Log Loss' : 'Mortality'}
                             </span>
                           </button>
+                          {b.status === 'active' && member.role === 'owner' && (
+                            <button
+                              type="button"
+                              onClick={() => openCloseoutModal(b)}
+                              className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+                              title="Closeout this flock"
+                            >
+                              Closeout
+                            </button>
+                          )}
+                          {b.closeoutSummary && (
+                            <button
+                              type="button"
+                              onClick={() => setViewingCloseoutBatch(b)}
+                              className="rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                              title="View closeout profitability summary"
+                            >
+                              Summary
+                            </button>
+                          )}
                           {canEdit && (
                             <button
                               type="button"
@@ -1401,6 +1572,293 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
         }}
         onClose={() => setDeactivateTarget(null)}
       />
+
+      {/* CLOSEOUT FLOCK MODAL */}
+      {closeoutTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="max-h-[92vh] sm:max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-2xl sm:rounded-xl border border-amber-300 bg-white p-5 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
+            <div className="flex items-center justify-between border-b border-amber-200 pb-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100 px-2 py-0.5 rounded">Owner Action</span>
+                <h2 className="text-lg font-bold text-slate-900 mt-1">Depopulate &amp; Closeout Flock: {closeoutTarget.batchCode}</h2>
+                <p className="text-xs text-slate-500">{closeoutTarget.birdType} · {closeoutTarget.penNameSnapshot}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCloseoutTarget(null)}
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCloseoutSubmit} className="mt-4 space-y-4">
+              {closeoutError && (
+                <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                  {closeoutError}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-xs text-amber-900">
+                <p className="font-semibold">Important:</p>
+                <p className="mt-0.5">Closing out this flock permanently sets it to Inactive, releases pen &quot;{closeoutTarget.penNameSnapshot}&quot; for the next batch, and locks a permanent lifetime KPI summary.</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="closeout-date" className="block text-xs font-medium text-slate-700">
+                    Closeout Date <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    id="closeout-date"
+                    type="date"
+                    required
+                    value={closeoutDate}
+                    onChange={(e) => setCloseoutDate(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="closeout-reason" className="block text-xs font-medium text-slate-700">
+                    Closeout Reason <span className="text-red-600">*</span>
+                  </label>
+                  <select
+                    id="closeout-reason"
+                    value={closeoutReason}
+                    onChange={(e) => setCloseoutReason(e.target.value as any)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="spent_sold">Sold as Spent Hens / Meat</option>
+                    <option value="culled">End of Lay / Culled</option>
+                    <option value="transferred">Transferred to Another Facility</option>
+                    <option value="disease_depopulation">Emergency / Disease Depopulation</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label htmlFor="closeout-live" className="block text-xs font-medium text-slate-700">
+                    Final Live Birds Harvested/Counted <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    id="closeout-live"
+                    type="number"
+                    min="0"
+                    max={closeoutTarget.initialCount}
+                    required
+                    value={closeoutLiveCount}
+                    onChange={(e) => setCloseoutLiveCount(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="closeout-weight" className="block text-xs font-medium text-slate-700">
+                    Average Live Bird Weight (kg)
+                  </label>
+                  <input
+                    id="closeout-weight"
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="50"
+                    required
+                    value={closeoutAvgWeight}
+                    onChange={(e) => setCloseoutAvgWeight(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Calculated Lifetime Summary Preview */}
+              {(() => {
+                const live = parseInt(closeoutLiveCount, 10) || 0;
+                const weight = parseFloat(closeoutAvgWeight) || 0;
+                const metrics = batchMetrics.get(closeoutTarget.id) || { eggs: 0, feedKg: 0 };
+                const fin = financialsMap.get(closeoutTarget.id) || { totalRevenueNgn: 0, totalExpenseNgn: 0, netProfitNgn: 0 };
+                const isBroiler = closeoutTarget.birdType.toLowerCase().includes('broiler');
+                const prodMetric = isBroiler ? live * weight : metrics.eggs;
+                const fcr = calculateFeedConversionRatio(metrics.feedKg, prodMetric, isBroiler ? 'broiler' : 'layer');
+                const costEgg = calculateCostPerEgg(fin.totalExpenseNgn, metrics.eggs);
+                const costKg = calculateCostPerKgBodyWeight(fin.totalExpenseNgn, live, weight);
+
+                return (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs space-y-2">
+                    <p className="font-semibold text-slate-900 uppercase tracking-wide text-[10px]">Lifetime Snapshot Preview</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Total Intact Eggs</span>
+                        <span className="font-bold text-slate-900 font-mono">{formatEggCountInCrates(metrics.eggs)}</span>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Feed Consumed</span>
+                        <span className="font-bold text-slate-900 font-mono">{metrics.feedKg.toFixed(1)} kg</span>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Lifetime FCR</span>
+                        <span className="font-bold text-emerald-800 font-mono">{fcr > 0 ? fcr.toFixed(2) : '—'}</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Cost / Egg</span>
+                        <span className="font-bold text-slate-900 font-mono">{costEgg > 0 ? `₦${costEgg.toFixed(1)}` : '—'}</span>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Cost / kg</span>
+                        <span className="font-bold text-slate-900 font-mono">{costKg > 0 ? `₦${costKg.toFixed(0)}` : '—'}</span>
+                      </div>
+                      <div className="rounded bg-white p-2 border border-slate-100">
+                        <span className="text-slate-500 block text-[10px]">Net Profit</span>
+                        <span className={`font-bold font-mono ${fin.netProfitNgn >= 0 ? 'text-emerald-800' : 'text-red-700'}`}>
+                          {formatNgn(fin.netProfitNgn)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-3 border-t border-slate-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setCloseoutTarget(null)}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={closeoutSubmitting}
+                  className="rounded-lg bg-amber-800 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-900 disabled:opacity-60 shadow-xs"
+                >
+                  {closeoutSubmitting ? 'Closing Out Flock...' : 'Confirm Flock Closeout'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW CLOSEOUT SUMMARY MODAL */}
+      {viewingCloseoutBatch && viewingCloseoutBatch.closeoutSummary && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-0 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="max-h-[92vh] sm:max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-2xl sm:rounded-xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-800" />
+                  <h2 className="text-lg font-bold text-slate-900">Flock Closeout Summary</h2>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {viewingCloseoutBatch.batchCode} · {viewingCloseoutBatch.birdType} · Closed {viewingCloseoutBatch.closedDate || '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewingCloseoutBatch(null)}
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="flex items-center justify-between rounded-xl bg-slate-50 p-3 text-xs">
+                <div>
+                  <span className="text-slate-500 block">Closeout Reason</span>
+                  <span className="font-semibold capitalize text-slate-900">{viewingCloseoutBatch.closeoutReason?.replace('_', ' ') || 'Completed'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Final Live Birds</span>
+                  <span className="font-semibold font-mono text-slate-900">{viewingCloseoutBatch.finalLiveBirdCount?.toLocaleString() || '—'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Avg Weight</span>
+                  <span className="font-semibold font-mono text-slate-900">{viewingCloseoutBatch.averageBirdWeightKg ? `${viewingCloseoutBatch.averageBirdWeightKg} kg` : '—'}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Total Production</span>
+                  <span className="font-bold text-slate-900 font-mono text-sm">{formatEggCountInCrates(viewingCloseoutBatch.closeoutSummary.totalIntactEggs)}</span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">({viewingCloseoutBatch.closeoutSummary.totalIntactEggs.toLocaleString()} pcs)</span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Total Feed Consumed</span>
+                  <span className="font-bold text-slate-900 font-mono text-sm">{viewingCloseoutBatch.closeoutSummary.totalFeedKg.toFixed(1)} kg</span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">({(viewingCloseoutBatch.closeoutSummary.totalFeedKg / 25).toFixed(1)} bags)</span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Mortality Rate</span>
+                  <span className="font-bold text-red-700 font-mono text-sm">{viewingCloseoutBatch.closeoutSummary.mortalityRatePct.toFixed(2)}%</span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">{viewingCloseoutBatch.closeoutSummary.totalMortality} birds lost</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 text-xs">
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Total Revenue</span>
+                  <span className="font-bold text-slate-900 font-mono">{formatNgn(viewingCloseoutBatch.closeoutSummary.totalRevenueNgn)}</span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Total Expenses</span>
+                  <span className="font-bold text-slate-900 font-mono">{formatNgn(viewingCloseoutBatch.closeoutSummary.totalExpenseNgn)}</span>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <span className="text-slate-500 block text-[10px]">Net Profit / Loss</span>
+                  <span className={`font-bold font-mono ${viewingCloseoutBatch.closeoutSummary.netProfitNgn >= 0 ? 'text-emerald-800' : 'text-red-700'}`}>
+                    {formatNgn(viewingCloseoutBatch.closeoutSummary.netProfitNgn)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs space-y-2">
+                <p className="font-semibold text-emerald-950 uppercase tracking-wide text-[10px]">Cost Efficiency &amp; Conversion</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <span className="text-slate-600 block text-[10px]">Cost per Egg</span>
+                    <span className="font-bold text-emerald-950 font-mono text-sm">
+                      {viewingCloseoutBatch.closeoutSummary.costPerEggNgn > 0 ? `₦${viewingCloseoutBatch.closeoutSummary.costPerEggNgn.toFixed(2)}` : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 block text-[10px]">Cost per kg Live Weight</span>
+                    <span className="font-bold text-emerald-950 font-mono text-sm">
+                      {viewingCloseoutBatch.closeoutSummary.costPerKgBodyWeightNgn > 0 ? `₦${viewingCloseoutBatch.closeoutSummary.costPerKgBodyWeightNgn.toFixed(0)}` : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-600 block text-[10px]">Lifetime FCR</span>
+                    <span className="font-bold text-emerald-950 font-mono text-sm">
+                      {viewingCloseoutBatch.closeoutSummary.lifetimeFcr > 0 ? viewingCloseoutBatch.closeoutSummary.lifetimeFcr.toFixed(2) : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setViewingCloseoutBatch(null)}
+                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-medium text-white hover:bg-slate-900"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
