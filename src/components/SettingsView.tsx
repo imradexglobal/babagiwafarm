@@ -6,6 +6,8 @@ import {
   formatDateInTimezone,
   formatNgn,
   hasPermission,
+  FARM_JOB_TITLES,
+  isFarmOwnerTitle,
   normalizePermissions,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
@@ -124,6 +126,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   // Team / Invite state
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteTitle, setInviteTitle] = useState('Farm Attendant');
+  const [customInviteTitle, setCustomInviteTitle] = useState('');
   const [invitePerms, setInvitePerms] = useState<PermissionsMatrix>(
     structuredClone(DEFAULT_STAFF_PERMISSIONS)
   );
@@ -166,6 +169,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [invitePenIds, setInvitePenIds] = useState<string[]>([]);
   const [editMemberDepartments, setEditMemberDepartments] = useState<DepartmentType[]>(['poultry']);
   const [editMemberPenIds, setEditMemberPenIds] = useState<string[]>([]);
+
+  const inviteIsOwner = isFarmOwnerTitle(inviteTitle);
 
   // Real-time subscription to active care plan's schedule tasks
   React.useEffect(() => {
@@ -340,11 +345,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setSaving(true);
     setFeedback(null);
     try {
+      const resolvedTitle = inviteTitle === 'Custom Role – Create your own' ? customInviteTitle.trim() : inviteTitle;
+      if (!resolvedTitle) throw new Error('Enter a custom descriptive job title.');
       await createStaffInvite({
         farmId: farm.farmId,
         farmName: farm.name,
         email: inviteEmail,
-        jobTitle: inviteTitle,
+        jobTitle: resolvedTitle,
         permissions: invitePerms,
         departments: inviteDepartments,
         assignedPenIds: invitePenIds,
@@ -356,6 +363,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         text: `Invitation created for ${inviteEmail}. When they sign in with Google using this email, they can accept access to ${farm.name}.`,
       });
       setInviteEmail('');
+      setCustomInviteTitle('');
+      setInviteTitle('Farm Attendant');
       setInviteDepartments(['poultry']);
       setInvitePenIds([]);
     } catch (err) {
@@ -1366,19 +1375,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <label htmlFor="inv-title" className="block text-xs font-medium text-slate-700">
                     Descriptive Job Title <span className="text-red-600">*</span>
                   </label>
-                  <input
+                  <select
                     id="inv-title"
-                    type="text"
                     required
-                    maxLength={80}
                     value={inviteTitle}
                     onChange={(e) => setInviteTitle(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                  >
+                    {FARM_JOB_TITLES.map((title) => <option key={title} value={title}>{title}</option>)}
+                  </select>
+                  {inviteTitle === 'Custom Role – Create your own' && (
+                    <input
+                      type="text"
+                      required
+                      maxLength={80}
+                      value={customInviteTitle}
+                      onChange={(e) => setCustomInviteTitle(e.target.value)}
+                      placeholder="Enter a custom job title"
+                      className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  )}
                 </div>
               </div>
 
-              <div>
+              <div className={inviteIsOwner ? 'hidden' : ''}>
                 <label className="block text-xs font-medium text-slate-700">Assigned Department(s) *</label>
                 <p className="text-[11px] text-slate-500 mb-1.5">
                   Staff can only access modules for the departments they are assigned to (e.g. Poultry, Fishery, Crops).
@@ -1406,7 +1426,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              <div>
+              <div className={inviteIsOwner ? 'hidden' : ''}>
                 <label className="block text-xs font-medium text-slate-700">Assigned Pens / Houses</label>
                 <p className="text-[11px] text-slate-500 mb-1.5">
                   Staff will only see notifications and reminders for their assigned pens.
@@ -1436,10 +1456,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 )}
               </div>
 
-              <div>
+              <div className={inviteIsOwner ? 'hidden' : ''}>
                 <p className="mb-1.5 text-xs font-medium text-slate-700">Assigned Permissions</p>
                 {renderPermissionMatrixEditor(invitePerms, setInvitePerms)}
               </div>
+
+              {inviteIsOwner && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+                  Farm Owner access is automatic: all departments, all pens, and every farm-level permission will be granted.
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -1447,7 +1473,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-60"
               >
                 <Check className="h-4 w-4" />
-                <span>{saving ? 'Sending Invite...' : 'Create Staff Invitation'}</span>
+                <span>{saving ? 'Sending Invite...' : inviteIsOwner ? 'Create Farm Owner Invitation' : 'Create Staff Invitation'}</span>
               </button>
             </form>
           )}

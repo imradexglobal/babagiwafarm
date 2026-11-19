@@ -1,26 +1,29 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { AppShell, type NavSection } from './components/AppShell.tsx';
-import { AccountsView } from './components/AccountsView.tsx';
-import { BatchesView } from './components/BatchesView.tsx';
-import { CropsView } from './components/CropsView.tsx';
-import { EggStoreView } from './components/EggStoreView.tsx';
-import { FisheryView } from './components/FisheryView.tsx';
-import { LivestockView } from './components/LivestockView.tsx';
-import { DailyProductionView, type DailyProductionSubTab } from './components/DailyProductionView.tsx';
-import { DashboardView } from './components/DashboardView.tsx';
+import type { DailyProductionSubTab } from './components/DailyProductionView.tsx';
+import { lazyNamed } from './lib/lazyNamed.ts';
 import { LandingPage } from './components/LandingPage.tsx';
 import { OnboardingView } from './components/OnboardingView.tsx';
-import { PurchasesView } from './components/PurchasesView.tsx';
-import { ReportsView } from './components/ReportsView.tsx';
-import { SalesView } from './components/SalesView.tsx';
-import { SettingsView } from './components/SettingsView.tsx';
+const AccountsView = lazyNamed(() => import('./components/AccountsView.tsx'), 'AccountsView');
+const BatchesView = lazyNamed(() => import('./components/BatchesView.tsx'), 'BatchesView');
+const CropsView = lazyNamed(() => import('./components/CropsView.tsx'), 'CropsView');
+const EggStoreView = lazyNamed(() => import('./components/EggStoreView.tsx'), 'EggStoreView');
+const FisheryView = lazyNamed(() => import('./components/FisheryView.tsx'), 'FisheryView');
+const LivestockView = lazyNamed(() => import('./components/LivestockView.tsx'), 'LivestockView');
+const DailyProductionView = lazyNamed(() => import('./components/DailyProductionView.tsx'), 'DailyProductionView');
+const DashboardView = lazyNamed(() => import('./components/DashboardView.tsx'), 'DashboardView');
+const PurchasesView = lazyNamed(() => import('./components/PurchasesView.tsx'), 'PurchasesView');
+const ReportsView = lazyNamed(() => import('./components/ReportsView.tsx'), 'ReportsView');
+const SalesView = lazyNamed(() => import('./components/SalesView.tsx'), 'SalesView');
+const SettingsView = lazyNamed(() => import('./components/SettingsView.tsx'), 'SettingsView');
 import { formatDateInTimezone, hasPermission } from './domain/calculations.ts';
 import { useFirebaseSyncStatus } from './hooks/useFirebaseSyncStatus.ts';
 import { auth, formatUserFriendlyError } from './lib/firebase.ts';
 import { Building2, RefreshCw } from 'lucide-react';
 import {
   acceptPendingInvite,
+  rejectPendingInvite,
   clearUserBinding,
   createFarmAndOwner,
   getPendingInviteForEmail,
@@ -307,6 +310,9 @@ export default function App() {
     const farmId = userBinding.farmId;
     const unsubs: (() => void)[] = [];
     const onErr = (err: Error) => setDataError(formatUserFriendlyError(err));
+    const isDashboard = activeSection === 'dashboard';
+    const isRecordsView = isDashboard || activeSection === 'production' || activeSection === 'batches' || activeSection === 'reports';
+    const isFeedView = isDashboard || activeSection === 'production' || activeSection === 'purchases' || activeSection === 'batches' || activeSection === 'reports';
 
     // Active members can read reference setup, batches, and saved drafts
     unsubs.push(subscribePens(farmId, setPens, onErr));
@@ -319,21 +325,21 @@ export default function App() {
 
     const canReadReports = hasPermission(member, 'reports', 'read') || member.role === 'owner';
 
-    if (hasPermission(member, 'production', 'read') || canReadReports || hasPermission(member, 'eggStore', 'transfer')) {
+    if (isRecordsView && (hasPermission(member, 'production', 'read') || canReadReports || hasPermission(member, 'eggStore', 'transfer'))) {
       unsubs.push(subscribeEggProduction(farmId, setProduction, onErr));
     }
-    if (hasPermission(member, 'feed', 'read') || canReadReports) {
+    if (isFeedView && (hasPermission(member, 'feed', 'read') || canReadReports)) {
       unsubs.push(subscribeFeedPurchases(farmId, setPurchases, onErr));
       unsubs.push(subscribeFeedConsumption(farmId, setConsumptions, onErr));
       unsubs.push(subscribeFarmPurchases(farmId, setFarmPurchases, onErr));
     }
-    if (hasPermission(member, 'sales', 'read') || canReadReports) {
+    if ((isDashboard || activeSection === 'sales' || activeSection === 'reports') && (hasPermission(member, 'sales', 'read') || canReadReports)) {
       unsubs.push(subscribeEggSales(farmId, setSales, onErr));
     }
     const canReadAccounts = member.role === 'owner' || canReadReports ||
       hasPermission(member, 'sales', 'read') || hasPermission(member, 'sales', 'create') ||
       hasPermission(member, 'feed', 'read') || hasPermission(member, 'feed', 'create');
-    if (canReadAccounts) {
+    if (['accounts', 'sales', 'purchases'].includes(activeSection) && canReadAccounts) {
       unsubs.push(subscribeCustomers(farmId, setCustomers, onErr));
       unsubs.push(subscribeVendors(farmId, setVendors, onErr));
       unsubs.push(subscribeSalesInvoices(farmId, setSalesInvoices, onErr));
@@ -345,7 +351,7 @@ export default function App() {
       hasPermission(member, 'eggStore', 'receive') || hasPermission(member, 'eggStore', 'sort') ||
       hasPermission(member, 'eggStore', 'adjust') || hasPermission(member, 'eggStore', 'distribute') ||
       hasPermission(member, 'eggStore', 'dispose') || hasPermission(member, 'settings', 'edit');
-    if (canUseEggStore) {
+    if ((isDashboard || activeSection === 'eggStore') && canUseEggStore) {
       unsubs.push(subscribeEggStoreSettings(farmId, setEggStoreSettings, onErr));
       unsubs.push(subscribeEggTransfers(farmId, setEggTransfers, onErr));
       unsubs.push(subscribeEggStoreReceipts(farmId, setEggStoreReceipts, onErr));
@@ -353,28 +359,28 @@ export default function App() {
       unsubs.push(subscribeEggInventoryBalances(farmId, setEggInventoryBalances, onErr));
       unsubs.push(subscribeEggInventoryMovements(farmId, setEggInventoryMovements, onErr));
     }
-    if (
+    if (isRecordsView && (
       hasPermission(member, 'batches', 'read') ||
       hasPermission(member, 'production', 'read') ||
       canReadReports
-    ) {
+    )) {
       unsubs.push(subscribeMortalityEntries(farmId, setMortalityEntries, onErr));
       unsubs.push(subscribeMedicationLogs(farmId, setMedicationLogs, onErr));
       unsubs.push(subscribeEnvironmentLogs(farmId, setEnvironmentLogs, onErr));
       unsubs.push(subscribeFarmReminders(farmId, setFarmReminders, onErr));
     }
-    if (hasPermission(member, 'members', 'read') || member.role === 'owner') {
+    if (activeSection === 'settings' && (hasPermission(member, 'members', 'read') || member.role === 'owner')) {
       unsubs.push(subscribeMembers(farmId, setMembers, onErr));
       unsubs.push(subscribeInvites(farmId, setInvites, onErr));
     }
-    if (canReadReports) {
+    if (activeSection === 'reports' && canReadReports) {
       unsubs.push(subscribeAuditLogs(farmId, setAuditLogs, onErr));
     }
 
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [authReady, user, userBinding, member]);
+  }, [authReady, user, userBinding, member, activeSection]);
 
   const handleSignIn = async () => {
     setAuthError(null);
@@ -470,6 +476,12 @@ export default function App() {
     await loadBinding(user);
   };
 
+  const handleRejectInvite = async (invite: PendingInvite, reason: string) => {
+    if (!user) return;
+    await rejectPendingInvite({ user, invite, reason });
+    setPendingInvite(null);
+  };
+
   if (!authReady || (user && bindingLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -492,6 +504,7 @@ export default function App() {
         pendingInvite={pendingInvite}
         onCreateFarm={handleCreateFarm}
         onAcceptInvite={handleAcceptInvite}
+        onRejectInvite={handleRejectInvite}
         onSignOut={handleSignOut}
       />
     );
@@ -532,8 +545,12 @@ export default function App() {
             </div>
           )}
 
-          {/* Diagnostic Info */}
-          <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-left text-[11px] text-slate-600 space-y-1">
+          {/* Diagnostic Info: keep identifiers out of the primary error presentation. */}
+          <details className="rounded-lg border border-slate-200 bg-slate-50 text-left text-[11px] text-slate-600">
+            <summary className="cursor-pointer select-none px-3 py-2 font-medium text-slate-600 hover:text-slate-900">
+              Technical details
+            </summary>
+            <div className="space-y-1 border-t border-slate-200 px-3 py-3">
             <div className="flex justify-between">
               <span className="font-medium text-slate-500">Account:</span>
               <span className="font-mono truncate max-w-[200px]">{user.email}</span>
@@ -554,7 +571,8 @@ export default function App() {
               <span className="font-medium text-slate-500">Sync Status:</span>
               <span className="capitalize">{syncState}</span>
             </div>
-          </div>
+            </div>
+          </details>
 
           <div className="flex flex-col gap-2 pt-2">
             {(isMissing || loadTimedOut) && (
@@ -624,6 +642,17 @@ export default function App() {
       onSelectSection={handleSelectSection}
       onSignOut={handleSignOut}
     >
+      <Suspense
+        fallback={
+          <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-stone-200 bg-white/70 p-8">
+            <div className="text-center">
+              <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-emerald-800 border-t-transparent" />
+              <p className="mt-3 text-sm font-medium text-stone-700">Loading this farm view…</p>
+              <p className="mt-1 text-xs text-stone-500">Cached information will appear as soon as it is available.</p>
+            </div>
+          </div>
+        }
+      >
       {dataError && (
         <div
           role="alert"
@@ -773,6 +802,7 @@ export default function App() {
           carePlans={carePlans}
         />
       )}
+      </Suspense>
     </AppShell>
   );
 }

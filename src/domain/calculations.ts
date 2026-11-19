@@ -21,6 +21,18 @@ export const EGGS_PER_CRATE = 30;
 export const DEFAULT_BAG_WEIGHT_KG = 25;
 export const DEFAULT_TIMEZONE = 'Africa/Lagos';
 
+export const FARM_JOB_TITLES = [
+  'Farm Owner', 'Farm Manager', 'Assistant Farm Manager', 'Farm Supervisor',
+  'Poultry Manager', 'Livestock Manager', 'Animal Health Officer', 'Veterinarian',
+  'Farm Attendant', 'Pen Supervisor', 'Feed Manager', 'Storekeeper',
+  'Inventory Manager', 'Accountant', 'Administrative Officer', 'Sales Officer',
+  'Security Personnel', 'Maintenance Officer', 'Custom Role – Create your own',
+] as const;
+
+export function isFarmOwnerTitle(title: string): boolean {
+  return title.trim().toLowerCase() === 'farm owner';
+}
+
 /** Percentage of live hens laying intact eggs on a given day. */
 export function calculateHenDayRate(intactEggs: number, liveBirds: number): number {
   if (![intactEggs, liveBirds].every(Number.isFinite) || intactEggs < 0 || liveBirds <= 0) return 0;

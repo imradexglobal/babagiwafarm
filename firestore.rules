@@ -356,7 +356,7 @@ service cloud.firestore {
         && isValidId(d.inviteId)
         && d.emailLower is string && d.emailLower.size() >= 3 && d.emailLower.size() <= 200
         && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
-        && d.role == 'staff'
+        && d.role in ['owner', 'staff']
         && isValidPermissions(d.permissions)
         && (!('departments' in d) || d.departments is list)
         && (!('assignedPenIds' in d) || d.assignedPenIds is list)
@@ -403,13 +403,14 @@ service cloud.firestore {
     }
 
     function isValidFarmInvite(d, farmId, inviteId) {
-      return d.keys().hasAll(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
-        && d.keys().hasOnly(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+      return d.keys().hasAll(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'role', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'role', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
         && d.id == inviteId
         && d.farmId == farmId
         && isValidId(d.emailKey)
         && d.emailLower is string && d.emailLower.size() >= 3 && d.emailLower.size() <= 200
         && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
+        && d.role in ['owner', 'staff']
         && isValidPermissions(d.permissions)
         && (!('departments' in d) || d.departments is list)
         && (!('assignedPenIds' in d) || d.assignedPenIds is list)
@@ -894,12 +895,12 @@ function isValidEggProduction(d, farmId, entryId) {
             && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)).data.ownerUid == uid
             && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == 'owner'
           ) || (
-            incoming().role == 'staff'
+            incoming().role in ['owner', 'staff']
             && exists(/databases/$(database)/documents/farms/$(incoming().farmId))
             && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
             && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'pending'
             && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.farmId == incoming().farmId
-            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == 'staff'
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == incoming().role
           )
         );
       allow update: if false;
@@ -1007,7 +1008,7 @@ function isValidEggProduction(d, farmId, entryId) {
             // Invited staff accepting pending invite (bound strictly to pending invite permissions)
             (
               memberUid == request.auth.uid
-              && incoming().role == 'staff'
+              && incoming().role == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.role
               && incoming().status == 'active'
               && exists(/databases/$(database)/documents/farms/$(farmId))
               && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
@@ -1019,7 +1020,7 @@ function isValidEggProduction(d, farmId, entryId) {
               && incoming().createdBy == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.invitedBy
               && getAfter(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'accepted'
               && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId
-              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'staff'
+              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.role
             )
           );
         allow update: if isValidId(farmId)

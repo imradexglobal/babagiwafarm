@@ -5,11 +5,12 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
-import { DEFAULT_BAG_WEIGHT_KG, generateId, toEmailKey } from '../domain/calculations.ts';
+import { DEFAULT_BAG_WEIGHT_KG, DEFAULT_STAFF_PERMISSIONS, OWNER_FULL_PERMISSIONS, generateId, isFarmOwnerTitle, toEmailKey } from '../domain/calculations.ts';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type {
   AuditLog,
@@ -23,6 +24,13 @@ import type {
   SalesUnit,
 } from '../types/farm.ts';
 import { buildAuditLogEntry } from './auditHelper.ts';
+
+class DuplicateStaffInviteError extends Error {
+  constructor(email: string) {
+    super(`An invitation already exists for ${email}. Revoke the existing invitation before creating a new one.`);
+    this.name = 'DuplicateStaffInviteError';
+  }
+}
 
 export async function updateFarmProfile(params: {
   farmId: string;
@@ -419,22 +427,27 @@ export async function createStaffInvite(params: {
   }
   const jobTitle = params.jobTitle.trim();
   if (!jobTitle) throw new Error('Descriptive job title is required.');
+  const isOwner = isFarmOwnerTitle(jobTitle);
 
   const emailKey = toEmailKey(emailLower);
   const inviteId = generateId('inv');
-  const batch = writeBatch(db);
-  const departments = params.departments && params.departments.length > 0 ? params.departments : ['poultry' as DepartmentType];
-  const assignedPenIds = params.assignedPenIds || [];
+  const pendingRef = doc(db, 'pendingInvites', emailKey);
+  const inviteRef = doc(db, 'farms', params.farmId, 'invites', inviteId);
+  const departments = isOwner
+    ? ['poultry', 'fishery', 'crops', 'livestock', 'general'] as DepartmentType[]
+    : (params.departments && params.departments.length > 0 ? params.departments : ['poultry' as DepartmentType]);
+  const assignedPenIds = isOwner ? [] : (params.assignedPenIds || []);
+  const permissions = isOwner ? OWNER_FULL_PERMISSIONS : (params.permissions || DEFAULT_STAFF_PERMISSIONS);
 
-  batch.set(doc(db, 'pendingInvites', emailKey), {
+  const pendingInvite = {
     emailKey,
     farmId: params.farmId,
     farmName: params.farmName.slice(0, 120),
     inviteId,
     emailLower: emailLower.slice(0, 200),
     jobTitle: jobTitle.slice(0, 80),
-    role: 'staff',
-    permissions: params.permissions,
+    role: isOwner ? 'owner' : 'staff',
+    permissions,
     departments,
     assignedPenIds,
     status: 'pending',
@@ -442,15 +455,16 @@ export async function createStaffInvite(params: {
     acceptedByUid: '',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
 
-  batch.set(doc(db, 'farms', params.farmId, 'invites', inviteId), {
+  const farmInvite = {
     id: inviteId,
     farmId: params.farmId,
     emailKey,
     emailLower: emailLower.slice(0, 200),
     jobTitle: jobTitle.slice(0, 80),
-    permissions: params.permissions,
+    role: isOwner ? 'owner' : 'staff',
+    permissions,
     departments,
     assignedPenIds,
     status: 'pending',
@@ -458,7 +472,7 @@ export async function createStaffInvite(params: {
     acceptedByUid: '',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
-  });
+  };
 
   const audit = buildAuditLogEntry({
     farmId: params.farmId,
@@ -470,12 +484,20 @@ export async function createStaffInvite(params: {
     actorUid: params.actorUid,
     actorName: params.actorName,
   });
-  batch.set(audit.ref, audit.data);
-
   try {
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const existingPending = await transaction.get(pendingRef);
+      if (existingPending.exists() && existingPending.data().status === 'pending') {
+        throw new DuplicateStaffInviteError(emailLower);
+      }
+
+      transaction.set(pendingRef, pendingInvite);
+      transaction.set(inviteRef, farmInvite);
+      transaction.set(audit.ref, audit.data);
+    });
     return inviteId;
   } catch (err) {
+    if (err instanceof DuplicateStaffInviteError) throw err;
     handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/invites/${inviteId}`);
   }
 }

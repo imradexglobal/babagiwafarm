@@ -10,6 +10,8 @@ import {
   LogOut,
   Menu,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Settings,
   ShoppingBag,
@@ -62,7 +64,22 @@ export const AppShell: React.FC<AppShellProps> = ({
   children,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [desktopNavCollapsed, setDesktopNavCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem('babagiwa:compact-navigation') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [alertsOpen, setAlertsOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('babagiwa:compact-navigation', String(desktopNavCollapsed));
+    } catch {
+      // Navigation preference is optional; continue if storage is unavailable.
+    }
+  }, [desktopNavCollapsed]);
 
   useEffect(() => {
     if (dueReminderCount < 1 || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
@@ -186,13 +203,13 @@ export const AppShell: React.FC<AppShellProps> = ({
   return (
     <div className="min-h-screen bg-[#fcfbf7] text-stone-900 lg:flex">
       {/* Desktop Sidebar (Preserved 100% with Agricultural Theme) */}
-      <aside className="hidden lg:flex lg:w-64 lg:shrink-0 lg:flex-col lg:border-r lg:border-stone-200/80 lg:bg-white shadow-[2px_0_12px_rgba(15,61,46,0.03)]">
-        <div className="border-b border-stone-200/80 px-5 py-4 bg-gradient-to-b from-emerald-50/60 to-transparent">
-          <div className="flex items-center gap-3">
+      <aside className={`hidden lg:flex lg:shrink-0 lg:flex-col lg:border-r lg:border-stone-200/80 lg:bg-white shadow-[2px_0_12px_rgba(15,61,46,0.03)] transition-[width] duration-200 ${desktopNavCollapsed ? 'lg:w-[76px]' : 'lg:w-64'}`}>
+        <div className={`border-b border-stone-200/80 py-4 bg-gradient-to-b from-emerald-50/60 to-transparent ${desktopNavCollapsed ? 'px-3' : 'px-5'}`}>
+          <div className={`flex items-center gap-3 ${desktopNavCollapsed ? 'justify-center' : ''}`}>
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-700 to-green-900 text-white shadow-xs">
               <Sprout className="h-5 w-5 text-emerald-200" />
             </div>
-            <div className="min-w-0">
+            <div className={`min-w-0 ${desktopNavCollapsed ? 'hidden' : ''}`}>
               <p className="font-display text-base font-bold tracking-tight text-emerald-950 truncate">
                 {farm.name}
               </p>
@@ -203,6 +220,16 @@ export const AppShell: React.FC<AppShellProps> = ({
                 <span className="text-[11px] font-mono text-stone-500">{farm.currency}</span>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => setDesktopNavCollapsed((collapsed) => !collapsed)}
+              className="ml-auto shrink-0 rounded-lg border border-emerald-200 bg-white p-1.5 text-emerald-900 shadow-2xs hover:bg-emerald-50"
+              aria-label={desktopNavCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+              aria-expanded={!desktopNavCollapsed}
+              title={desktopNavCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            >
+              {desktopNavCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+            </button>
           </div>
         </div>
 
@@ -215,7 +242,8 @@ export const AppShell: React.FC<AppShellProps> = ({
                 key={item.id}
                 type="button"
                 onClick={() => handleNavClick(item.id)}
-                className={`flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all cursor-pointer ${
+                title={desktopNavCollapsed ? item.label : undefined}
+                className={`flex w-full items-center rounded-xl px-3.5 py-2.5 text-sm font-semibold transition-all cursor-pointer ${desktopNavCollapsed ? 'justify-center' : 'justify-between'} ${
                   active
                     ? 'bg-gradient-to-r from-emerald-800 to-green-900 text-white shadow-sm ring-1 ring-emerald-950/20'
                     : 'text-stone-700 hover:bg-emerald-50/60 hover:text-emerald-950'
@@ -223,9 +251,9 @@ export const AppShell: React.FC<AppShellProps> = ({
               >
                 <div className="flex items-center gap-3 truncate">
                   <Icon className={`h-4 w-4 shrink-0 ${active ? 'text-emerald-200' : 'text-emerald-800'}`} />
-                  <span className="truncate">{item.label}</span>
+                  <span className={`truncate ${desktopNavCollapsed ? 'hidden' : ''}`}>{item.label}</span>
                 </div>
-                {active && (
+                {active && !desktopNavCollapsed && (
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" aria-hidden="true" />
                 )}
                 {item.id === 'production' && pendingProductionCount > 0 && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">{pendingProductionCount}</span>}
@@ -234,8 +262,8 @@ export const AppShell: React.FC<AppShellProps> = ({
           })}
         </nav>
 
-        <div className="border-t border-slate-200 p-4">
-          <div className="text-xs">
+        <div className={`border-t border-slate-200 p-4 ${desktopNavCollapsed ? 'p-2' : ''}`}>
+          <div className={`text-xs ${desktopNavCollapsed ? 'hidden' : ''}`}>
             <p className="font-semibold text-slate-900 truncate">{member.displayName}</p>
             <p className="mt-0.5 text-slate-500 truncate">
               {member.jobTitle} · {member.role === 'owner' ? 'Owner' : 'Staff'}
@@ -253,10 +281,11 @@ export const AppShell: React.FC<AppShellProps> = ({
           <button
             type="button"
             onClick={onSignOut}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer"
+            title={desktopNavCollapsed ? 'Sign out' : undefined}
+            className={`${desktopNavCollapsed ? 'mt-0' : 'mt-3'} flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap cursor-pointer`}
           >
             <LogOut className="h-3.5 w-3.5" />
-            <span>Sign Out</span>
+            <span className={desktopNavCollapsed ? 'hidden' : ''}>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -384,6 +413,15 @@ export const AppShell: React.FC<AppShellProps> = ({
               aria-label="Open navigation menu"
             >
               <Menu className="h-5 w-5 text-emerald-900" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setDesktopNavCollapsed((collapsed) => !collapsed)}
+              className="hidden lg:inline-flex rounded-xl border border-stone-200/80 bg-white p-2 text-emerald-900 shadow-2xs hover:bg-emerald-50"
+              aria-label={desktopNavCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+              title={desktopNavCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+            >
+              {desktopNavCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
             </button>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 lg:hidden truncate">

@@ -96,7 +96,7 @@ export function handleFirestoreError(
 }
 
 export function formatUserFriendlyError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
+  if (!(err instanceof Error)) return 'Something went wrong. Please try again.';
   const authCode = (err as Error & { code?: string }).code || '';
   const authMessage = err.message.toUpperCase();
   if (authCode === 'auth/configuration-not-found' || authMessage.includes('CONFIGURATION_NOT_FOUND')) {
@@ -112,14 +112,23 @@ export function formatUserFriendlyError(err: unknown): string {
     const parsed = JSON.parse(err.message) as Partial<FirestoreErrorInfo>;
     if (parsed && typeof parsed.error === 'string') {
       if (parsed.error.toLowerCase().includes('permission') || parsed.error.includes('insufficient')) {
-        return 'Permission denied: your account does not have authorization for this action or farm record.';
+        return 'You do not have permission to perform this action.';
       }
-      return parsed.error;
+      if (parsed.error.toLowerCase().includes('offline') || parsed.error.toLowerCase().includes('network')) {
+        return 'Unable to connect. Please check your internet connection and try again.';
+      }
+      return 'Something went wrong while saving your information. Please try again.';
     }
   } catch {
     // Plain error message
   }
-  return err.message;
+  if (authCode === 'auth/email-already-in-use') return 'This email address is already registered.';
+  if (authCode === 'auth/invalid-email') return 'Please enter a valid email address.';
+  if (authCode === 'auth/network-request-failed') return 'Unable to connect. Please check your internet connection and try again.';
+  if (/permission-denied|insufficient permissions/i.test(err.message)) return 'You do not have permission to perform this action.';
+  if (/network|offline|failed to fetch/i.test(err.message)) return 'Unable to connect. Please check your internet connection and try again.';
+  if (/invalid invitation|expired invitation|already been accepted|email does not match/i.test(err.message)) return err.message;
+  return 'Something went wrong. Please try again.';
 }
 
 export async function testConnection(): Promise<boolean> {

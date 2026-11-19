@@ -5,6 +5,7 @@ export type DepartmentType = 'poultry' | 'fishery' | 'crops' | 'livestock' | 'ge
 export type RecurrenceUnit = 'once' | 'hour' | 'day' | 'week' | 'month';
 
 export type MemberRole = 'owner' | 'staff';
+export type InviteRole = MemberRole;
 export type MemberStatus = 'active' | 'inactive';
 
 export interface CrudPermission {
@@ -75,7 +76,7 @@ export interface PendingInvite {
   inviteId: string;
   emailLower: string;
   jobTitle: string;
-  role: 'staff';
+  role: InviteRole;
   permissions: PermissionsMatrix;
   departments?: DepartmentType[];
   assignedPenIds?: string[];
@@ -122,12 +123,15 @@ export interface FarmInvite {
   emailKey: string;
   emailLower: string;
   jobTitle: string;
+  role?: InviteRole;
   permissions: PermissionsMatrix;
   departments?: DepartmentType[];
   assignedPenIds?: string[];
-  status: 'pending' | 'accepted' | 'revoked';
+  status: 'pending' | 'accepted' | 'rejected' | 'revoked';
   invitedBy: string;
   acceptedByUid: string;
+  rejectedByUid?: string;
+  rejectionReason?: string;
   createdAt: unknown;
   updatedAt: unknown;
 }

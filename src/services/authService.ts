@@ -3,18 +3,34 @@ import {
   doc,
   getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
-  writeBatch,
 } from 'firebase/firestore';
 import { signInWithPopup as authSignInWithPopup, signOut as authSignOut, type User } from 'firebase/auth';
 import {
   DEFAULT_TIMEZONE,
   OWNER_FULL_PERMISSIONS,
-  generateId,
   toEmailKey,
 } from '../domain/calculations.ts';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type { Farm, FarmMember, PendingInvite, UserFarmBinding } from '../types/farm.ts';
+
+export function normalizeFarmId(name: string): string {
+  // Firestore farm document IDs are intentionally human-readable and stable:
+  // "Babagiwa Farm" -> "babagiwa_farm". Do not add a generated prefix.
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+class DuplicateFarmNameError extends Error {
+  constructor(farmName: string) {
+    super(`A farm with the name "${farmName}" already exists. Please choose a different name.`);
+    this.name = 'DuplicateFarmNameError';
+  }
+}
 
 export async function signInWithGoogle(): Promise<User> {
   const cred = await authSignInWithPopup(auth, googleProvider);
@@ -78,64 +94,73 @@ export async function createFarmAndOwner(params: {
   if (!user.email || !user.emailVerified) {
     throw new Error('A verified email account is required to initialize a farm.');
   }
+  const userEmail = user.email.toLowerCase();
   const farmName = params.farmName.trim();
   if (farmName.length < 2) {
     throw new Error('Farm name must be at least 2 characters.');
   }
 
-  const farmId = generateId('farm');
-  const displayName = (user.displayName || user.email.split('@')[0] || 'Farm Owner').slice(0, 150);
+  const farmId = normalizeFarmId(farmName);
+  if (!farmId) {
+    throw new Error('Farm name must contain at least one letter or number.');
+  }
+  const displayName = (user.displayName || userEmail.split('@')[0] || 'Farm Owner').slice(0, 150);
   const timezone = (params.timezone || DEFAULT_TIMEZONE).trim() || DEFAULT_TIMEZONE;
 
-  const batch = writeBatch(db);
   const farmRef = doc(db, 'farms', farmId);
   const memberRef = doc(db, 'farms', farmId, 'members', user.uid);
   const userRef = doc(db, 'users', user.uid);
 
-  batch.set(farmRef, {
-    farmId,
-    name: farmName.slice(0, 120),
-    location: params.location.trim().slice(0, 200),
-    contactPhone: params.contactPhone.trim().slice(0, 60),
-    contactEmail: (params.contactEmail.trim() || user.email).slice(0, 150),
-    currency: 'NGN',
-    timezone: timezone.slice(0, 64),
-    activeSectors: ['poultry'],
-    ownerUid: user.uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(memberRef, {
-    uid: user.uid,
-    farmId,
-    email: user.email.toLowerCase().slice(0, 200),
-    displayName,
-    jobTitle: 'Farm Owner',
-    role: 'owner',
-    status: 'active',
-    permissions: OWNER_FULL_PERMISSIONS,
-    departments: ['poultry', 'fishery', 'crops', 'livestock', 'general'],
-    assignedPenIds: [],
-    createdBy: user.uid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(userRef, {
-    uid: user.uid,
-    email: user.email.toLowerCase().slice(0, 200),
-    displayName,
-    farmId,
-    role: 'owner',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
   try {
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const farmSnapshot = await transaction.get(farmRef);
+      if (farmSnapshot.exists()) {
+        throw new DuplicateFarmNameError(farmName);
+      }
+
+      transaction.set(farmRef, {
+        farmId,
+        name: farmName.slice(0, 120),
+        location: params.location.trim().slice(0, 200),
+        contactPhone: params.contactPhone.trim().slice(0, 60),
+        contactEmail: (params.contactEmail.trim() || userEmail).slice(0, 150),
+        currency: 'NGN',
+        timezone: timezone.slice(0, 64),
+        activeSectors: ['poultry'],
+        ownerUid: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      transaction.set(memberRef, {
+        uid: user.uid,
+        farmId,
+        email: userEmail.slice(0, 200),
+        displayName,
+        jobTitle: 'Farm Owner',
+        role: 'owner',
+        status: 'active',
+        permissions: OWNER_FULL_PERMISSIONS,
+        departments: ['poultry', 'fishery', 'crops', 'livestock', 'general'],
+        assignedPenIds: [],
+        createdBy: user.uid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      transaction.set(userRef, {
+        uid: user.uid,
+        email: userEmail.slice(0, 200),
+        displayName,
+        farmId,
+        role: 'owner',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
     return farmId;
   } catch (err) {
+    if (err instanceof DuplicateFarmNameError) throw err;
     handleFirestoreError(err, OperationType.WRITE, `farms/${farmId}`);
   }
 }
@@ -152,54 +177,49 @@ export async function acceptPendingInvite(params: {
     throw new Error('Signed-in email does not match the invitation email.');
   }
 
-  const displayName = (user.displayName || user.email.split('@')[0] || 'Farm Staff').slice(0, 150);
-  const batch = writeBatch(db);
-
+  const userEmail = user.email.toLowerCase();
+  const displayName = (user.displayName || userEmail.split('@')[0] || 'Farm Staff').slice(0, 150);
   const pendingRef = doc(db, 'pendingInvites', invite.emailKey);
   const farmInviteRef = doc(db, 'farms', invite.farmId, 'invites', invite.inviteId);
   const memberRef = doc(db, 'farms', invite.farmId, 'members', user.uid);
   const userRef = doc(db, 'users', user.uid);
 
-  batch.update(pendingRef, {
-    status: 'accepted',
-    acceptedByUid: user.uid,
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.update(farmInviteRef, {
-    status: 'accepted',
-    acceptedByUid: user.uid,
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(memberRef, {
-    uid: user.uid,
-    farmId: invite.farmId,
-    email: user.email.toLowerCase().slice(0, 200),
-    displayName,
-    jobTitle: invite.jobTitle,
-    role: 'staff',
-    status: 'active',
-    permissions: invite.permissions,
-    departments: invite.departments || ['poultry'],
-    assignedPenIds: invite.assignedPenIds || [],
-    createdBy: invite.invitedBy,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(userRef, {
-    uid: user.uid,
-    email: user.email.toLowerCase().slice(0, 200),
-    displayName,
-    farmId: invite.farmId,
-    role: 'staff',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-
   try {
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const [pendingSnapshot, farmInviteSnapshot, existingMember, existingUser] = await Promise.all([
+        transaction.get(pendingRef),
+        transaction.get(farmInviteRef),
+        transaction.get(memberRef),
+        transaction.get(userRef),
+      ]);
+      if (!pendingSnapshot.exists() || !farmInviteSnapshot.exists()) {
+        throw new Error('This invitation is invalid or may have expired.');
+      }
+      const current = pendingSnapshot.data() as PendingInvite;
+      if (current.emailLower !== userEmail) {
+        throw new Error('Signed-in email does not match the invitation email.');
+      }
+      if (current.status === 'accepted') {
+        if (current.acceptedByUid === user.uid && existingMember.exists() && existingUser.exists()) return;
+        throw new Error('This invitation has already been accepted.');
+      }
+      if (current.status !== 'pending') throw new Error('This invitation is invalid or may have expired.');
+      const role = current.role || 'staff';
+      const permissions = role === 'owner' ? OWNER_FULL_PERMISSIONS : current.permissions;
+      transaction.update(pendingRef, { status: 'accepted', acceptedByUid: user.uid, updatedAt: serverTimestamp() });
+      transaction.update(farmInviteRef, { status: 'accepted', acceptedByUid: user.uid, updatedAt: serverTimestamp() });
+      transaction.set(memberRef, {
+        uid: user.uid, farmId: current.farmId, email: userEmail.slice(0, 200), displayName,
+        jobTitle: current.jobTitle, role, status: 'active', permissions,
+        departments: role === 'owner' ? ['poultry', 'fishery', 'crops', 'livestock', 'general'] : (current.departments || ['poultry']),
+        assignedPenIds: role === 'owner' ? [] : (current.assignedPenIds || []),
+        createdBy: current.invitedBy, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      });
+      transaction.set(userRef, {
+        uid: user.uid, email: userEmail.slice(0, 200), displayName,
+        farmId: current.farmId, role, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      });
+    });
     return invite.farmId;
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `pendingInvites/${invite.emailKey}`);
