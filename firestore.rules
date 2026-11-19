@@ -64,8 +64,8 @@ service cloud.firestore {
 
     function isBoundToFarm(farmId) {
       return isEmailVerified()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId;
+        && exists(/databases/$(database)/documents/userBindings/$(request.auth.uid))
+        && get(/databases/$(database)/documents/userBindings/$(request.auth.uid)).data.farmId == farmId;
     }
 
     function isFarmOwner(farmId) {
@@ -349,7 +349,7 @@ service cloud.firestore {
 
     function isValidPendingInvite(d, emailKey) {
       return d.keys().hasAll(['emailKey', 'farmId', 'farmName', 'inviteId', 'emailLower', 'jobTitle', 'role', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
-        && d.keys().hasOnly(['emailKey', 'farmId', 'farmName', 'inviteId', 'emailLower', 'jobTitle', 'role', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['emailKey', 'farmId', 'farmName', 'inviteId', 'emailLower', 'jobTitle', 'role', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'rejectedByUid', 'rejectionReason', 'createdAt', 'updatedAt'])
         && d.emailKey == emailKey
         && isValidId(d.farmId)
         && d.farmName is string && d.farmName.size() >= 1 && d.farmName.size() <= 120
@@ -360,9 +360,11 @@ service cloud.firestore {
         && isValidPermissions(d.permissions)
         && (!('departments' in d) || d.departments is list)
         && (!('assignedPenIds' in d) || d.assignedPenIds is list)
-        && d.status in ['pending', 'accepted', 'revoked']
+        && d.status in ['pending', 'accepted', 'rejected', 'revoked']
         && isValidId(d.invitedBy)
         && d.acceptedByUid is string && d.acceptedByUid.size() <= 128
+        && (!('rejectedByUid' in d) || isValidId(d.rejectedByUid))
+        && (!('rejectionReason' in d) || (d.rejectionReason is string && d.rejectionReason.size() <= 300))
         && d.createdAt is timestamp
         && d.updatedAt is timestamp;
     }
@@ -404,7 +406,7 @@ service cloud.firestore {
 
     function isValidFarmInvite(d, farmId, inviteId) {
       return d.keys().hasAll(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'role', 'permissions', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
-        && d.keys().hasOnly(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'role', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'createdAt', 'updatedAt'])
+        && d.keys().hasOnly(['id', 'farmId', 'emailKey', 'emailLower', 'jobTitle', 'role', 'permissions', 'departments', 'assignedPenIds', 'status', 'invitedBy', 'acceptedByUid', 'rejectedByUid', 'rejectionReason', 'createdAt', 'updatedAt'])
         && d.id == inviteId
         && d.farmId == farmId
         && isValidId(d.emailKey)
@@ -414,9 +416,11 @@ service cloud.firestore {
         && isValidPermissions(d.permissions)
         && (!('departments' in d) || d.departments is list)
         && (!('assignedPenIds' in d) || d.assignedPenIds is list)
-        && d.status in ['pending', 'accepted', 'revoked']
+        && d.status in ['pending', 'accepted', 'rejected', 'revoked']
         && isValidId(d.invitedBy)
         && d.acceptedByUid is string && d.acceptedByUid.size() <= 128
+        && (!('rejectedByUid' in d) || isValidId(d.rejectedByUid))
+        && (!('rejectionReason' in d) || (d.rejectionReason is string && d.rejectionReason.size() <= 300))
         && d.createdAt is timestamp
         && d.updatedAt is timestamp;
     }
@@ -879,7 +883,33 @@ function isValidEggProduction(d, farmId, entryId) {
     // -------------------------------------------------------------------------
     // 1. User-to-Farm Binding (One-Farm-Per-Account Enforcement)
     // -------------------------------------------------------------------------
-    match /users/{uid} {
+    match /users/{userDocId} {
+      allow get: if isSignedIn() && existing().uid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isEmailVerified()
+        && request.auth.uid == incoming().uid
+        && isValidUserBinding(incoming(), incoming().uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (
+            incoming().role == 'owner'
+            && !exists(/databases/$(database)/documents/farms/$(incoming().farmId))
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)).data.ownerUid == request.auth.uid
+          ) || (
+            incoming().role in ['owner', 'staff']
+            && exists(/databases/$(database)/documents/farms/$(incoming().farmId))
+            && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
+            && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'pending'
+            && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.farmId == incoming().farmId
+            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(request.auth.uid)).data.role == incoming().role
+          )
+        );
+      allow update: if false;
+      allow delete: if isSignedIn() && existing().uid == request.auth.uid;
+    }
+
+    match /userBindings/{uid} {
       allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
       allow list: if false;
       allow create: if isEmailVerified()
@@ -893,7 +923,6 @@ function isValidEggProduction(d, farmId, entryId) {
             incoming().role == 'owner'
             && !exists(/databases/$(database)/documents/farms/$(incoming().farmId))
             && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)).data.ownerUid == uid
-            && getAfter(/databases/$(database)/documents/farms/$(incoming().farmId)/members/$(uid)).data.role == 'owner'
           ) || (
             incoming().role in ['owner', 'staff']
             && exists(/databases/$(database)/documents/farms/$(incoming().farmId))
@@ -940,15 +969,22 @@ function isValidEggProduction(d, farmId, entryId) {
             && incoming().status == 'revoked'
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
           ) ||
-          (
-            existing().status == 'pending'
-            && existing().emailLower == request.auth.token.email.lower()
-            && incoming().status == 'accepted'
-            && incoming().acceptedByUid == request.auth.uid
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
-            && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
-            && existsAfter(/databases/$(database)/documents/farms/$(existing().farmId)/members/$(request.auth.uid))
-          )
+            (
+              existing().status == 'pending'
+              && existing().emailLower == request.auth.token.email.lower()
+              && incoming().status == 'accepted'
+              && incoming().acceptedByUid == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+              && existsAfter(/databases/$(database)/documents/userBindings/$(request.auth.uid))
+              && existsAfter(/databases/$(database)/documents/farms/$(existing().farmId)/members/$(request.auth.uid))
+            ) ||
+            (
+              existing().status == 'pending'
+              && existing().emailLower == request.auth.token.email.lower()
+              && incoming().status == 'rejected'
+              && incoming().rejectedByUid == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'rejectedByUid', 'rejectionReason', 'updatedAt'])
+            )
         );
       allow delete: if false;
     }
@@ -965,9 +1001,7 @@ function isValidEggProduction(d, farmId, entryId) {
         && incoming().ownerUid == request.auth.uid
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time
-        && !exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
-        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId;
+        && !exists(/databases/$(database)/documents/userBindings/$(request.auth.uid));
       allow update: if isValidId(farmId)
         && isValidFarm(incoming(), farmId)
         && canEditSettings(farmId)
@@ -1019,8 +1053,8 @@ function isValidEggProduction(d, farmId, entryId) {
               && incoming().jobTitle == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.jobTitle
               && incoming().createdBy == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.invitedBy
               && getAfter(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'accepted'
-              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.farmId == farmId
-              && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.role
+              && getAfter(/databases/$(database)/documents/userBindings/$(request.auth.uid)).data.farmId == farmId
+              && getAfter(/databases/$(database)/documents/userBindings/$(request.auth.uid)).data.role == get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.role
             )
           );
         allow update: if isValidId(farmId)
@@ -1077,6 +1111,14 @@ function isValidEggProduction(d, farmId, entryId) {
               && incoming().status == 'accepted'
               && incoming().acceptedByUid == request.auth.uid
               && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'updatedAt'])
+            ) ||
+            (
+              isEmailVerified()
+              && existing().status == 'pending'
+              && existing().emailLower == request.auth.token.email.lower()
+              && incoming().status == 'rejected'
+              && incoming().rejectedByUid == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'rejectedByUid', 'rejectionReason', 'updatedAt'])
             )
           );
         allow delete: if false;

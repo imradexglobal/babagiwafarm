@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { User } from 'firebase/auth';
-import { Building2, LogOut, MailCheck } from 'lucide-react';
+import { Building2, LogOut, MailCheck, X } from 'lucide-react';
+import { formatUserFriendlyError } from '../lib/firebase.ts';
 import type { PendingInvite } from '../types/farm.ts';
 
 interface OnboardingViewProps {
@@ -14,6 +15,7 @@ interface OnboardingViewProps {
     timezone: string;
   }) => Promise<void>;
   onAcceptInvite: (invite: PendingInvite) => Promise<void>;
+  onRejectInvite: (invite: PendingInvite, reason: string) => Promise<void>;
   onSignOut: () => Promise<void>;
 }
 
@@ -22,6 +24,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   pendingInvite,
   onCreateFarm,
   onAcceptInvite,
+  onRejectInvite,
   onSignOut,
 }) => {
   const [farmName, setFarmName] = useState('Babagiwa Poultry Farm');
@@ -31,6 +34,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   const [timezone, setTimezone] = useState('Africa/Lagos');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   const handleCreateFarmSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,7 +43,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
     try {
       await onCreateFarm({ farmName, location, contactPhone, contactEmail, timezone });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatUserFriendlyError(err));
     } finally {
       setSubmitting(false);
     }
@@ -52,7 +56,20 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
     try {
       await onAcceptInvite(pendingInvite);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatUserFriendlyError(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!pendingInvite) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await onRejectInvite(pendingInvite, rejectionReason);
+    } catch (err) {
+      setError(formatUserFriendlyError(err));
     } finally {
       setSubmitting(false);
     }
@@ -123,6 +140,29 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
               className="mt-6 w-full rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-900 disabled:opacity-60"
             >
               {submitting ? 'Joining Farm Workspace...' : `Accept & Join ${pendingInvite.farmName}`}
+            </button>
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <label htmlFor="invite-rejection-reason" className="block text-xs font-medium text-amber-900">
+                Decline reason (optional)
+              </label>
+              <textarea
+                id="invite-rejection-reason"
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                maxLength={300}
+                rows={2}
+                placeholder="Let the inviter know why you are declining."
+                className="mt-1.5 w-full rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm text-slate-900"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={handleReject}
+              disabled={submitting}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <X className="h-4 w-4" />
+              {submitting ? 'Responding...' : 'Decline Invitation'}
             </button>
           </div>
         ) : (

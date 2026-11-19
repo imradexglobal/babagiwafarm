@@ -4,6 +4,7 @@ import {
   getDoc,
   onSnapshot,
   runTransaction,
+  writeBatch,
   serverTimestamp,
 } from 'firebase/firestore';
 import { signInWithPopup as authSignInWithPopup, signOut as authSignOut, type User } from 'firebase/auth';
@@ -25,11 +26,10 @@ export function normalizeFarmId(name: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
-class DuplicateFarmNameError extends Error {
-  constructor(farmName: string) {
-    super(`A farm with the name "${farmName}" already exists. Please choose a different name.`);
-    this.name = 'DuplicateFarmNameError';
-  }
+export function buildUserDocumentId(farmId: string, displayName: string): string {
+  const farmKey = normalizeFarmId(farmId);
+  const nameKey = normalizeFarmId(displayName) || 'user';
+  return `${farmKey}_${nameKey}`;
 }
 
 export async function signInWithGoogle(): Promise<User> {
@@ -42,11 +42,15 @@ export async function signOutUser(): Promise<void> {
 }
 
 export async function getUserBinding(uid: string): Promise<UserFarmBinding | null> {
-  const path = `users/${uid}`;
+  const path = `userBindings/${uid}`;
   try {
-    const snap = await getDoc(doc(db, 'users', uid));
-    if (!snap.exists()) return null;
-    const data = snap.data() as UserFarmBinding;
+    const snap = await getDoc(doc(db, 'userBindings', uid));
+    if (snap.exists()) return snap.data() as UserFarmBinding;
+
+    // Backward-compatible read for accounts created before the name-based ID migration.
+    const legacySnap = await getDoc(doc(db, 'users', uid));
+    if (!legacySnap.exists()) return null;
+    const data = legacySnap.data() as UserFarmBinding;
     if (!data || !data.farmId) return null;
     return data;
   } catch (err) {
@@ -55,9 +59,13 @@ export async function getUserBinding(uid: string): Promise<UserFarmBinding | nul
 }
 
 export async function clearUserBinding(uid: string): Promise<void> {
-  const path = `users/${uid}`;
+  const path = `userBindings/${uid}`;
   try {
-    await deleteDoc(doc(db, 'users', uid));
+    const binding = await getUserBinding(uid);
+    await deleteDoc(doc(db, 'userBindings', uid));
+    if (binding) {
+      await deleteDoc(doc(db, 'users', buildUserDocumentId(binding.farmId, binding.displayName)));
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, path);
   }
@@ -109,16 +117,13 @@ export async function createFarmAndOwner(params: {
 
   const farmRef = doc(db, 'farms', farmId);
   const memberRef = doc(db, 'farms', farmId, 'members', user.uid);
-  const userRef = doc(db, 'users', user.uid);
+  const userDocId = buildUserDocumentId(farmId, displayName);
+  const userRef = doc(db, 'users', userDocId);
+  const bindingRef = doc(db, 'userBindings', user.uid);
 
   try {
-    await runTransaction(db, async (transaction) => {
-      const farmSnapshot = await transaction.get(farmRef);
-      if (farmSnapshot.exists()) {
-        throw new DuplicateFarmNameError(farmName);
-      }
-
-      transaction.set(farmRef, {
+    const batch = writeBatch(db);
+    batch.set(farmRef, {
         farmId,
         name: farmName.slice(0, 120),
         location: params.location.trim().slice(0, 200),
@@ -130,9 +135,9 @@ export async function createFarmAndOwner(params: {
         ownerUid: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+    });
 
-      transaction.set(memberRef, {
+    batch.set(memberRef, {
         uid: user.uid,
         farmId,
         email: userEmail.slice(0, 200),
@@ -146,9 +151,9 @@ export async function createFarmAndOwner(params: {
         createdBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
+    });
 
-      transaction.set(userRef, {
+    batch.set(userRef, {
         uid: user.uid,
         email: userEmail.slice(0, 200),
         displayName,
@@ -156,11 +161,19 @@ export async function createFarmAndOwner(params: {
         role: 'owner',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      });
     });
+    batch.set(bindingRef, {
+        uid: user.uid,
+        email: userEmail.slice(0, 200),
+        displayName,
+        farmId,
+        role: 'owner',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
     return farmId;
   } catch (err) {
-    if (err instanceof DuplicateFarmNameError) throw err;
     handleFirestoreError(err, OperationType.WRITE, `farms/${farmId}`);
   }
 }
@@ -182,15 +195,18 @@ export async function acceptPendingInvite(params: {
   const pendingRef = doc(db, 'pendingInvites', invite.emailKey);
   const farmInviteRef = doc(db, 'farms', invite.farmId, 'invites', invite.inviteId);
   const memberRef = doc(db, 'farms', invite.farmId, 'members', user.uid);
-  const userRef = doc(db, 'users', user.uid);
+  const userDocId = buildUserDocumentId(invite.farmId, displayName);
+  const userRef = doc(db, 'users', userDocId);
+  const bindingRef = doc(db, 'userBindings', user.uid);
 
   try {
     await runTransaction(db, async (transaction) => {
-      const [pendingSnapshot, farmInviteSnapshot, existingMember, existingUser] = await Promise.all([
+      const [pendingSnapshot, farmInviteSnapshot, existingMember, existingUser, existingBinding] = await Promise.all([
         transaction.get(pendingRef),
         transaction.get(farmInviteRef),
         transaction.get(memberRef),
         transaction.get(userRef),
+        transaction.get(bindingRef),
       ]);
       if (!pendingSnapshot.exists() || !farmInviteSnapshot.exists()) {
         throw new Error('This invitation is invalid or may have expired.');
@@ -200,7 +216,7 @@ export async function acceptPendingInvite(params: {
         throw new Error('Signed-in email does not match the invitation email.');
       }
       if (current.status === 'accepted') {
-        if (current.acceptedByUid === user.uid && existingMember.exists() && existingUser.exists()) return;
+        if (current.acceptedByUid === user.uid && existingMember.exists() && existingUser.exists() && existingBinding.exists()) return;
         throw new Error('This invitation has already been accepted.');
       }
       if (current.status !== 'pending') throw new Error('This invitation is invalid or may have expired.');
@@ -219,9 +235,66 @@ export async function acceptPendingInvite(params: {
         uid: user.uid, email: userEmail.slice(0, 200), displayName,
         farmId: current.farmId, role, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
       });
+      transaction.set(bindingRef, {
+        uid: user.uid, email: userEmail.slice(0, 200), displayName,
+        farmId: current.farmId, role, createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+      });
     });
     return invite.farmId;
   } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `pendingInvites/${invite.emailKey}`);
+  }
+}
+
+export async function rejectPendingInvite(params: {
+  user: User;
+  invite: PendingInvite;
+  reason?: string;
+}): Promise<void> {
+  const { user, invite } = params;
+  if (!user.email || !user.emailVerified) {
+    throw new Error('A verified email account is required to respond to an invitation.');
+  }
+  if (user.email.toLowerCase() !== invite.emailLower) {
+    throw new Error('Signed-in email does not match the invitation email.');
+  }
+
+  const reason = (params.reason || 'The invitee declined this invitation.').trim().slice(0, 300);
+  const pendingRef = doc(db, 'pendingInvites', invite.emailKey);
+  const farmInviteRef = doc(db, 'farms', invite.farmId, 'invites', invite.inviteId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const [pendingSnapshot, farmInviteSnapshot] = await Promise.all([
+        transaction.get(pendingRef),
+        transaction.get(farmInviteRef),
+      ]);
+      if (!pendingSnapshot.exists() || !farmInviteSnapshot.exists()) {
+        throw new Error('This invitation is invalid or may have expired.');
+      }
+      const current = pendingSnapshot.data() as PendingInvite;
+      if (current.emailLower !== user.email!.toLowerCase()) {
+        throw new Error('Signed-in email does not match the invitation email.');
+      }
+      if (current.status !== 'pending') {
+        throw new Error('This invitation is no longer available.');
+      }
+
+      transaction.update(pendingRef, {
+        status: 'rejected',
+        rejectedByUid: user.uid,
+        rejectionReason: reason,
+        updatedAt: serverTimestamp(),
+      });
+      transaction.update(farmInviteRef, {
+        status: 'rejected',
+        rejectedByUid: user.uid,
+        rejectionReason: reason,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  } catch (err) {
+    if (err instanceof Error && /invitation|email does not match/i.test(err.message)) throw err;
     handleFirestoreError(err, OperationType.WRITE, `pendingInvites/${invite.emailKey}`);
   }
 }

@@ -80,9 +80,11 @@ export interface PendingInvite {
   permissions: PermissionsMatrix;
   departments?: DepartmentType[];
   assignedPenIds?: string[];
-  status: 'pending' | 'accepted' | 'revoked';
+  status: 'pending' | 'accepted' | 'rejected' | 'revoked';
   invitedBy: string;
   acceptedByUid: string;
+  rejectedByUid?: string;
+  rejectionReason?: string;
   createdAt: unknown;
   updatedAt: unknown;
 }

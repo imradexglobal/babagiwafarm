@@ -117,6 +117,9 @@ export function formatUserFriendlyError(err: unknown): string {
       if (parsed.error.toLowerCase().includes('offline') || parsed.error.toLowerCase().includes('network')) {
         return 'Unable to connect. Please check your internet connection and try again.';
       }
+      if (/invitation|email does not match|verified email/i.test(parsed.error)) {
+        return parsed.error;
+      }
       return 'Something went wrong while saving your information. Please try again.';
     }
   } catch {

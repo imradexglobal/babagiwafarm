@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
+import { formatUserFriendlyError } from '../lib/firebase.ts';
 
 interface ConfirmVoidModalProps {
   open: boolean;
@@ -41,7 +42,7 @@ export const ConfirmVoidModal: React.FC<ConfirmVoidModalProps> = ({
       setReason('');
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatUserFriendlyError(err));
     } finally {
       setSubmitting(false);
     }

@@ -21,12 +21,13 @@ import {
   sanitizeCsvCell,
 } from '../src/domain/calculations.ts';
 import type { FarmMember, FeedPurchase, MortalityEntry } from '../src/types/farm.ts';
-import { normalizeFarmId } from '../src/services/authService.ts';
+import { buildUserDocumentId, normalizeFarmId } from '../src/services/authService.ts';
 
 test('normalizeFarmId uses the farm name as a stable Firestore document ID', () => {
   assert.equal(normalizeFarmId('Babagiwa Farm'), 'babagiwa_farm');
   assert.equal(normalizeFarmId('  Babagiwa   Farm  '), 'babagiwa_farm');
   assert.equal(normalizeFarmId('Babagiwa-Farm Ltd.'), 'babagiwa_farm_ltd');
+  assert.equal(buildUserDocumentId('babagiwa_farm', 'Abdul Wasiu Adebowale'), 'babagiwa_farm_abdul_wasiu_adebowale');
 });
 
 test('poultry KPI calculations return rounded ratios and handle zero denominators', () => {

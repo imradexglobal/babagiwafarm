@@ -1496,7 +1496,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <tr key={inv.id}>
                         <td className="py-2 font-mono">{inv.emailLower}</td>
                         <td className="py-2">{inv.jobTitle}</td>
-                        <td className="py-2 capitalize">{inv.status}</td>
+                        <td className="py-2 capitalize">
+                          <span>{inv.status}</span>
+                          {inv.status === 'rejected' && inv.rejectionReason && (
+                            <span className="mt-0.5 block max-w-xs normal-case text-[11px] text-slate-500">
+                              Reason: {inv.rejectionReason}
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2 text-right">
                           {canManageMembers && inv.status === 'pending' && (
                             <button
