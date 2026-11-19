@@ -52,6 +52,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
   const canCreate = hasPermission(member, 'feed', 'create');
+  const canRead = hasPermission(member, 'feed', 'read');
   const canEdit = hasPermission(member, 'feed', 'edit');
   const canDelete = hasPermission(member, 'feed', 'delete');
 
@@ -286,6 +287,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
           <p className="mt-1 text-xs text-slate-500">
             Authoritative stock stored in grams; consumption locks cost from the latest qualifying purchase on or before consumption date.
           </p>
+          {canCreate && !canRead && (
+            <p className="mt-1 text-xs text-amber-800">
+              Feed read access is required to record consumption because its cost is calculated from purchase history.
+            </p>
+          )}
         </div>
 
         {canCreate && (
@@ -302,7 +308,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             <button
               type="button"
               onClick={openConsumptionModal}
-              disabled={activeItems.length === 0 || activeBatches.length === 0}
+              disabled={!canRead || activeItems.length === 0 || activeBatches.length === 0}
               className="inline-flex items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Plus className="h-4 w-4" />

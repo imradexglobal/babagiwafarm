@@ -884,7 +884,9 @@ function isValidEggProduction(d, farmId, entryId) {
     // 1. User-to-Farm Binding (One-Farm-Per-Account Enforcement)
     // -------------------------------------------------------------------------
     match /users/{userDocId} {
-      allow get: if isSignedIn() && existing().uid == request.auth.uid;
+      allow get: if isSignedIn()
+        && ((resource == null && userDocId == request.auth.uid)
+          || existing().uid == request.auth.uid);
       allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow create: if isEmailVerified()
         && request.auth.uid == incoming().uid
@@ -1017,7 +1019,13 @@ function isValidEggProduction(d, farmId, entryId) {
         allow get: if isValidId(farmId)
           && isValidId(memberUid)
           && (
-            (isEmailVerified() && request.auth.uid == memberUid && existing().farmId == farmId) ||
+            (isEmailVerified() && request.auth.uid == memberUid && (
+              (resource != null && existing().farmId == farmId) ||
+              (resource == null
+                && exists(/databases/$(database)/documents/pendingInvites/$(userEmailKey()))
+                && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.status == 'pending'
+                && get(/databases/$(database)/documents/pendingInvites/$(userEmailKey())).data.farmId == farmId)
+            )) ||
             canReadMembers(farmId)
           );
         allow list: if isValidId(farmId)
@@ -1076,7 +1084,9 @@ function isValidEggProduction(d, farmId, entryId) {
 
       // Farm Invites Log
       match /invites/{inviteId} {
-        allow get: if isValidId(farmId) && isValidId(inviteId) && canReadMembers(farmId);
+        allow get: if isValidId(farmId) && isValidId(inviteId)
+          && (canReadMembers(farmId)
+            || (isEmailVerified() && existing().emailLower == request.auth.token.email.lower()));
         allow list: if isValidId(farmId) && isEmailVerified() && canReadMembers(farmId);
         allow create: if isValidId(farmId)
           && isValidId(inviteId)
@@ -1191,7 +1201,7 @@ function isValidEggProduction(d, farmId, entryId) {
           && isValidId(feedItemId)
           && isValidFeedStock(incoming(), farmId, feedItemId)
           && (canEditSettings(farmId) || hasCrudPerm(farmId, 'feed', 'create'))
-          && exists(/databases/$(database)/documents/farms/$(farmId)/feedItems/$(feedItemId))
+          && existsAfter(/databases/$(database)/documents/farms/$(farmId)/feedItems/$(feedItemId))
           && incoming().updatedAt == request.time;
         allow update: if isValidId(farmId)
           && isValidId(feedItemId)
@@ -1230,7 +1240,8 @@ function isValidEggProduction(d, farmId, entryId) {
 
       // Batch Code Uniqueness Locks
       match /batchCodes/{codeKey} {
-        allow get: if isValidId(farmId) && isValidId(codeKey) && hasCrudPerm(farmId, 'batches', 'read');
+        allow get: if isValidId(farmId) && isValidId(codeKey)
+          && (hasCrudPerm(farmId, 'batches', 'read') || hasCrudPerm(farmId, 'batches', 'create'));
         allow list: if false;
         allow create: if isValidId(farmId)
           && isValidId(codeKey)

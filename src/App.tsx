@@ -450,6 +450,7 @@ export default function App() {
   };
 
   const handleSelectSection = (section: NavSection) => {
+    setDataError(null);
     if (section === 'production') {
       setDailyInitialSubTab('egg');
       setMortalityInitialBatchId(undefined);

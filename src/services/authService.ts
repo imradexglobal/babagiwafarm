@@ -201,11 +201,10 @@ export async function acceptPendingInvite(params: {
 
   try {
     await runTransaction(db, async (transaction) => {
-      const [pendingSnapshot, farmInviteSnapshot, existingMember, existingUser, existingBinding] = await Promise.all([
+      const [pendingSnapshot, farmInviteSnapshot, existingMember, existingBinding] = await Promise.all([
         transaction.get(pendingRef),
         transaction.get(farmInviteRef),
         transaction.get(memberRef),
-        transaction.get(userRef),
         transaction.get(bindingRef),
       ]);
       if (!pendingSnapshot.exists() || !farmInviteSnapshot.exists()) {
@@ -216,6 +215,7 @@ export async function acceptPendingInvite(params: {
         throw new Error('Signed-in email does not match the invitation email.');
       }
       if (current.status === 'accepted') {
+        const existingUser = await transaction.get(userRef);
         if (current.acceptedByUid === user.uid && existingMember.exists() && existingUser.exists() && existingBinding.exists()) return;
         throw new Error('This invitation has already been accepted.');
       }

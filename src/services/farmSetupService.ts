@@ -5,7 +5,6 @@ import {
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
   serverTimestamp,
   updateDoc,
   writeBatch,
@@ -24,13 +23,6 @@ import type {
   SalesUnit,
 } from '../types/farm.ts';
 import { buildAuditLogEntry } from './auditHelper.ts';
-
-class DuplicateStaffInviteError extends Error {
-  constructor(email: string) {
-    super(`An invitation already exists for ${email}. Revoke the existing invitation before creating a new one.`);
-    this.name = 'DuplicateStaffInviteError';
-  }
-}
 
 export async function updateFarmProfile(params: {
   farmId: string;
@@ -485,19 +477,16 @@ export async function createStaffInvite(params: {
     actorName: params.actorName,
   });
   try {
-    await runTransaction(db, async (transaction) => {
-      const existingPending = await transaction.get(pendingRef);
-      if (existingPending.exists() && existingPending.data().status === 'pending') {
-        throw new DuplicateStaffInviteError(emailLower);
-      }
-
-      transaction.set(pendingRef, pendingInvite);
-      transaction.set(inviteRef, farmInvite);
-      transaction.set(audit.ref, audit.data);
-    });
+    // Do not read pendingInvites/{emailKey} here: Firestore intentionally
+    // restricts that global document to the invitee. A write-only batch keeps
+    // invite creation atomic; rules still deny overwriting an existing invite.
+    const batch = writeBatch(db);
+    batch.set(pendingRef, pendingInvite);
+    batch.set(inviteRef, farmInvite);
+    batch.set(audit.ref, audit.data);
+    await batch.commit();
     return inviteId;
   } catch (err) {
-    if (err instanceof DuplicateStaffInviteError) throw err;
     handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/invites/${inviteId}`);
   }
 }
