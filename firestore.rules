@@ -386,7 +386,7 @@ service cloud.firestore {
         && d.updatedAt is timestamp;
     }
 
-    function isValidFarmMember(d, farmId, memberUid) {
+    function isValidFarmMemberCore(d, farmId, memberUid) {
       return d.keys().hasAll(['uid', 'farmId', 'email', 'displayName', 'jobTitle', 'role', 'status', 'permissions', 'createdBy', 'createdAt', 'updatedAt'])
         && d.keys().hasOnly(['uid', 'farmId', 'email', 'displayName', 'jobTitle', 'role', 'status', 'permissions', 'departments', 'assignedPenIds', 'createdBy', 'createdAt', 'updatedAt'])
         && d.uid == memberUid
@@ -396,12 +396,16 @@ service cloud.firestore {
         && d.jobTitle is string && d.jobTitle.size() >= 1 && d.jobTitle.size() <= 80
         && d.role in ['owner', 'staff']
         && d.status in ['active', 'inactive']
-        && isValidPermissions(d.permissions)
         && (!('departments' in d) || d.departments is list)
         && (!('assignedPenIds' in d) || d.assignedPenIds is list)
         && isValidId(d.createdBy)
         && d.createdAt is timestamp
         && d.updatedAt is timestamp;
+    }
+
+    function isValidFarmMember(d, farmId, memberUid) {
+      return isValidFarmMemberCore(d, farmId, memberUid)
+        && isValidPermissions(d.permissions);
     }
 
     function isValidFarmInvite(d, farmId, inviteId) {
@@ -957,7 +961,7 @@ function isValidEggProduction(d, farmId, entryId) {
         && canManageMembers(incoming().farmId);
       allow update: if isEmailVerified()
         && isValidId(emailKey)
-        && isValidPendingInvite(incoming(), emailKey)
+        && existing().emailKey == emailKey
         && incoming().emailKey == existing().emailKey
         && incoming().farmId == existing().farmId
         && incoming().emailLower == existing().emailLower
@@ -1034,7 +1038,7 @@ function isValidEggProduction(d, farmId, entryId) {
         allow create: if isEmailVerified()
           && isValidId(farmId)
           && isValidId(memberUid)
-          && isValidFarmMember(incoming(), farmId, memberUid)
+          && isValidFarmMemberCore(incoming(), farmId, memberUid)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
           && (
@@ -1042,6 +1046,7 @@ function isValidEggProduction(d, farmId, entryId) {
             (
               memberUid == request.auth.uid
               && incoming().role == 'owner'
+              && isValidPermissions(incoming().permissions)
               && incoming().status == 'active'
               && incoming().createdBy == request.auth.uid
               && !exists(/databases/$(database)/documents/farms/$(farmId))
@@ -1099,7 +1104,8 @@ function isValidEggProduction(d, farmId, entryId) {
           && incoming().updatedAt == request.time;
         allow update: if isValidId(farmId)
           && isValidId(inviteId)
-          && isValidFarmInvite(incoming(), farmId, inviteId)
+          && existing().id == inviteId
+          && existing().farmId == farmId
           && incoming().id == existing().id
           && incoming().farmId == existing().farmId
           && incoming().emailKey == existing().emailKey
