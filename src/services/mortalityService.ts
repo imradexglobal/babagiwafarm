@@ -94,9 +94,11 @@ export async function createMortalityEntry(params: {
   const batchWrite = writeBatch(db);
   const ref = doc(db, 'farms', params.farmId, 'mortalityEntries', id);
 
+  const mortalityParentId = `mort_parent_${params.batch.id}_${params.transactionDate}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   batchWrite.set(ref, {
     id,
     farmId: params.farmId,
+    parentId: mortalityParentId,
     transactionDate: params.transactionDate,
     timeOfDay: params.timeOfDay,
     batchId: params.batch.id,
@@ -111,6 +113,11 @@ export async function createMortalityEntry(params: {
     isVoided: false,
     voidReason: '',
     voidedBy: '',
+    status: 'APPROVED',
+    approvedBy: params.actorUid,
+    approvedByName: params.actorName.slice(0, 150),
+    approvedAt: serverTimestamp(),
+    approvalAuditId: '',
     createdBy: params.actorUid,
     createdByName: params.actorName.slice(0, 150),
     updatedBy: params.actorUid,

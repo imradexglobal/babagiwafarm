@@ -70,6 +70,15 @@ const TYPE_META: Record<
   vaccination: { label: 'Vaccination', Icon: Syringe },
   medication: { label: 'Medication', Icon: Pill },
   milestone: { label: 'Batch Milestone', Icon: Milestone },
+  feeding: { label: 'Feeding', Icon: Bell },
+  maintenance: { label: 'Maintenance', Icon: RotateCcw },
+  inspection: { label: 'Inspection', Icon: CheckCircle2 },
+  cleaning: { label: 'Cleaning', Icon: RotateCcw },
+  water_management: { label: 'Water management', Icon: Calendar },
+  animal_management: { label: 'Animal management', Icon: CheckCircle2 },
+  biosecurity: { label: 'Biosecurity', Icon: AlertTriangle },
+  monitoring: { label: 'Monitoring', Icon: CalendarClock },
+  general: { label: 'General care', Icon: Bell },
 };
 
 function renderUrgencyLabel(item: ResolvedReminderItem) {

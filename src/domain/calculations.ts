@@ -77,6 +77,7 @@ export const OWNER_FULL_PERMISSIONS: PermissionsMatrix = {
   settings: { read: true, edit: true },
   members: { read: true, manage: true },
   eggStore: { read: true, transfer: true, receive: true, sort: true, adjust: true, distribute: true, dispose: true },
+  care: { approve: true },
 };
 
 export const DEFAULT_STAFF_PERMISSIONS: PermissionsMatrix = {
@@ -88,6 +89,7 @@ export const DEFAULT_STAFF_PERMISSIONS: PermissionsMatrix = {
   settings: { read: false, edit: false },
   members: { read: false, manage: false },
   eggStore: { read: true, transfer: true, receive: true, sort: true, adjust: false, distribute: false, dispose: false },
+  care: { approve: false },
 };
 
 /** Adds safe defaults for the Egg Store domain when editing pre-upgrade staff records. */
@@ -102,6 +104,7 @@ export function normalizePermissions(permissions: Partial<PermissionsMatrix> | u
     settings: { ...defaults.settings, ...permissions?.settings },
     members: { ...defaults.members, ...permissions?.members },
     eggStore: { ...defaults.eggStore, ...permissions?.eggStore },
+    care: { ...defaults.care, ...permissions?.care },
   };
 }
 
@@ -909,97 +912,50 @@ export function buildBatchRemindersTimeline(params: {
 
   const batchById = new Map(batches.map((b) => [b.id, b]));
   const stdByKey = new Map(STANDARD_POULTRY_MILESTONES.map((m) => [m.milestoneKey, m]));
-  const resolvedPersistedMilestoneKeys = new Set<string>();
-  const items: ResolvedReminderItem[] = [];
 
-  for (const r of reminders) {
-    if (scopedBatchId && r.batchId !== scopedBatchId) continue;
-    const batch = batchById.get(r.batchId);
-    if (r.milestoneKey) {
-      resolvedPersistedMilestoneKeys.add(`${r.batchId}::${r.milestoneKey}`);
-    }
-    const daysUntilDue = diffDays(todayDateStr, r.dueDate);
-    const currentBatchAgeDays = batch ? getBatchAgeOnDateSafe(batch, todayDateStr) : null;
-    const stdMeta = r.milestoneKey ? stdByKey.get(r.milestoneKey) : undefined;
-    const urgency: ReminderUrgency =
-      r.status === 'completed'
-        ? 'completed'
-        : r.status === 'dismissed'
-        ? 'dismissed'
-        : classifyPendingUrgency(daysUntilDue);
+  // Only persisted farm reminders are shown; the legacy standard schedule is retained as review data, not synthesized.
+  const items: ResolvedReminderItem[] = reminders
+    .filter((reminder) => !scopedBatchId || reminder.batchId === scopedBatchId)
+    .map((reminder) => {
+      const batch = batchById.get(reminder.batchId);
+      const standard = reminder.milestoneKey ? stdByKey.get(reminder.milestoneKey) : undefined;
+      const daysUntilDue = diffDays(todayDateStr, reminder.dueDate);
+      const urgency: ReminderUrgency =
+        reminder.status === 'completed'
+          ? 'completed'
+          : reminder.status === 'dismissed' || reminder.status === 'skipped' || reminder.status === 'cancelled'
+            ? 'dismissed'
+            : classifyPendingUrgency(daysUntilDue);
 
-    items.push({
-      key: r.id,
-      source: r.milestoneKey ? 'standard' : 'custom',
-      persistedId: r.id,
-      farmId: r.farmId,
-      batchId: r.batchId,
-      batchCode: batch?.batchCode || r.batchCodeSnapshot,
-      penId: batch?.penId || r.penId,
-      penName: batch?.penNameSnapshot || r.penNameSnapshot,
-      milestoneKey: r.milestoneKey,
-      reminderType: r.reminderType,
-      title: r.title,
-      dueDate: r.dueDate,
-      targetAgeDays: r.targetAgeDays,
-      currentBatchAgeDays,
-      daysUntilDue,
-      urgency,
-      dosageOrAction: r.dosageOrAction,
-      notes: r.notes,
-      status: r.status,
-      completedAtDate: r.completedAtDate,
-      completedByName: r.completedByName,
-      suggestedTreatmentType: stdMeta?.suggestedTreatmentType,
-    });
-  }
-
-  for (const batch of batches) {
-    if (batch.status !== 'active') continue;
-    if (scopedBatchId && batch.id !== scopedBatchId) continue;
-    const currentAge = getBatchAgeOnDateSafe(batch, todayDateStr);
-    if (currentAge === null) continue;
-
-    for (const m of STANDARD_POULTRY_MILESTONES) {
-      const compositeKey = `${batch.id}::${m.milestoneKey}`;
-      if (resolvedPersistedMilestoneKeys.has(compositeKey)) continue;
-
-      const daysUntilDue = m.targetAgeDays - currentAge;
-      const dueDate = addDaysToIsoDate(todayDateStr, daysUntilDue);
-
-      // Ignore milestones that occurred before this batch was placed in the pen
-      if (dueDate < batch.placementDate) continue;
-
-      items.push({
-        key: compositeKey,
-        source: 'standard',
-        persistedId: null,
-        farmId: batch.farmId,
-        batchId: batch.id,
-        batchCode: batch.batchCode,
-        penId: batch.penId,
-        penName: batch.penNameSnapshot,
-        milestoneKey: m.milestoneKey,
-        reminderType: m.reminderType,
-        title: m.title,
-        dueDate,
-        targetAgeDays: m.targetAgeDays,
-        currentBatchAgeDays: currentAge,
+      return {
+        key: reminder.id,
+        source: standard ? 'standard' : 'custom',
+        persistedId: reminder.id,
+        farmId: reminder.farmId,
+        batchId: reminder.batchId,
+        batchCode: reminder.batchCodeSnapshot || batch?.batchCode || 'Unknown batch',
+        penId: reminder.penId || batch?.penId || '',
+        penName: reminder.penNameSnapshot || batch?.penNameSnapshot || 'Unknown pen',
+        milestoneKey: reminder.milestoneKey || '',
+        reminderType: reminder.reminderType,
+        title: reminder.title || standard?.title || 'Care activity',
+        dueDate: reminder.dueDate,
+        targetAgeDays: reminder.targetAgeDays ?? standard?.targetAgeDays ?? null,
+        currentBatchAgeDays: batch ? getBatchAgeOnDateSafe(batch, todayDateStr) : null,
         daysUntilDue,
-        urgency: classifyPendingUrgency(daysUntilDue),
-        dosageOrAction: m.dosageOrAction,
-        notes: m.notes,
-        status: 'pending',
-        completedAtDate: '',
-        completedByName: '',
-        suggestedTreatmentType: m.suggestedTreatmentType,
-      });
-    }
-  }
+        urgency,
+        dosageOrAction: reminder.dosageOrAction || standard?.dosageOrAction || '',
+        notes: reminder.notes || standard?.notes || '',
+        status: reminder.status,
+        completedAtDate: reminder.completedAtDate || '',
+        completedByName: reminder.completedByName || '',
+        suggestedTreatmentType: standard?.suggestedTreatmentType,
+      };
+    });
 
   return items.sort((a, b) => {
-    const aPending = a.status === 'pending' ? 0 : 1;
-    const bPending = b.status === 'pending' ? 0 : 1;
+    const aPending = ['pending', 'in_progress', 'pending_approval'].includes(a.status) ? 0 : 1;
+    const bPending = ['pending', 'in_progress', 'pending_approval'].includes(b.status) ? 0 : 1;
     if (aPending !== bPending) return aPending - bPending;
     if (aPending === 0) {
       if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
@@ -1043,13 +999,29 @@ export function computeNextDueDate(
   } else if (intervalUnit === 'week') {
     date.setUTCDate(date.getUTCDate() + safeInterval * 7);
   } else if (intervalUnit === 'month') {
+    const originalDay = date.getUTCDate();
+    date.setUTCDate(1);
     date.setUTCMonth(date.getUTCMonth() + safeInterval);
+    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+    date.setUTCDate(Math.min(originalDay, lastDay));
   }
 
   const nextY = date.getUTCFullYear();
   const nextM = String(date.getUTCMonth() + 1).padStart(2, '0');
   const nextD = String(date.getUTCDate()).padStart(2, '0');
   return `${nextY}-${nextM}-${nextD}`;
+}
+
+export function computeNextDueDateAfterCompletion(
+  scheduledDate: string,
+  completedAtDate: string,
+  intervalUnit: RecurrenceUnit,
+  intervalValue: number = 1
+): string | null {
+  // Keep the original cadence when completed early; late completions start the
+  // next interval from the day the task was actually completed.
+  const anchorDate = scheduledDate > completedAtDate ? scheduledDate : completedAtDate;
+  return computeNextDueDate(anchorDate, intervalUnit, intervalValue);
 }
 
 export function computeDateWithOffset(baseDate: string, offsetDays: number): string {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calendar, Check, ChevronDown, ChevronRight, Clock, Edit2, Layers, Pill, Plus, Repeat, Syringe, Trash2, UserPlus, X } from 'lucide-react';
+import { Calendar, Check, ChevronDown, ChevronRight, Clock, Edit2, Layers, Pill, Plus, PowerOff, Repeat, Syringe, Trash2, UserPlus, X } from 'lucide-react';
 import {
   DEFAULT_BAG_WEIGHT_KG,
   DEFAULT_STAFF_PERMISSIONS,
@@ -11,6 +11,7 @@ import {
   normalizePermissions,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
+import { CareInformationLibrary } from './CareInformationLibrary.tsx';
 import {
   createCarePlan,
   createCarePlanItem,
@@ -25,6 +26,9 @@ import {
   createPen,
   createSalesUnit,
   createStaffInvite,
+  resendStaffInviteEmail,
+  deleteStaffMember,
+  deactivateUnusedPen,
   revokeStaffInvite,
   updateFarmProfile,
   updateFeedItem,
@@ -40,6 +44,9 @@ import type {
   Pen,
   PermissionsMatrix,
   CarePlan,
+  CareInformation,
+  CareAgeReference,
+  CareCategory,
   CarePlanItem,
   DepartmentType,
   RecurrenceUnit,
@@ -55,7 +62,9 @@ interface SettingsViewProps {
   salesUnits: SalesUnit[];
   members: FarmMember[];
   invites: FarmInvite[];
+  batches?: import('../types/farm.ts').PoultryBatch[];
   carePlans?: CarePlan[];
+  careInformation?: CareInformation[];
 }
 
 
@@ -75,7 +84,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   salesUnits,
   members,
   invites,
+  batches = [],
   carePlans = [],
+  careInformation = [],
 }) => {
   const todayStr = formatDateInTimezone(new Date(), farm.timezone);
   const canEditSettings = hasPermission(member, 'settings', 'edit');
@@ -104,6 +115,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [penCapacity, setPenCapacity] = useState('1000');
   const [penNotes, setPenNotes] = useState('');
   const [penStatus, setPenStatus] = useState<'active' | 'inactive'>('active');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Feed item state
   const [feedModal, setFeedModal] = useState(false);
@@ -137,6 +149,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     structuredClone(DEFAULT_STAFF_PERMISSIONS)
   );
   const [saving, setSaving] = useState(false);
+  const [resendingInviteId, setResendingInviteId] = useState<string | null>(null);
   // Pen extra state
   const [penDepartment, setPenDepartment] = useState<DepartmentType>('poultry');
   const [penStaffUids, setPenStaffUids] = useState<string[]>([]);
@@ -148,6 +161,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [planDesc, setPlanDesc] = useState('');
   const [planType, setPlanType] = useState<'medication' | 'vaccination' | 'activity'>('medication');
   const [planStatus, setPlanStatus] = useState<'active' | 'inactive'>('active');
+  const [planAnimalType, setPlanAnimalType] = useState("Chicken");
+  const [planProductionType, setPlanProductionType] = useState("Layer");
+  const [planProductionStage, setPlanProductionStage] = useState("");
+  const [planSchedulingReference, setPlanSchedulingReference] = useState<CareAgeReference>("placement");
 
   const [activePlanIdForItems, setActivePlanIdForItems] = useState<string | null>(null);
   const [activePlanItems, setActivePlanItems] = useState<CarePlanItem[]>([]);
@@ -163,6 +180,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [itemIntervalUnit, setItemIntervalUnit] = useState<RecurrenceUnit>('once');
   const [itemIntervalValue, setItemIntervalValue] = useState('1');
   const [itemSortOrder, setItemSortOrder] = useState('0');
+  const [itemCareInformationId, setItemCareInformationId] = useState("");
+  const [itemCategory, setItemCategory] = useState<CareCategory>("general");
+  const [itemRequiresApproval, setItemRequiresApproval] = useState(false);
+  const [itemRequiresVeterinaryApproval, setItemRequiresVeterinaryApproval] = useState(false);
+  const [itemAgeReference, setItemAgeReference] = useState<CareAgeReference>("placement");
 
   // Staff extra state
   const [inviteDepartments, setInviteDepartments] = useState<DepartmentType[]>(['poultry']);
@@ -340,6 +362,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
+  const handleDeactivatePen = async (pen: Pen) => { if (!window.confirm('Deactivate unused pen "' + pen.name + '"? The pen record will be preserved and can be reactivated later.')) return; setDeletingId(pen.id); try { await deactivateUnusedPen({ farmId: farm.farmId, pen, actorUid: member.uid, actorName: member.displayName }); setFeedback({ type: 'success', text: `Pen "${pen.name}" deactivated.` }); } catch (err) { setFeedback({ type: 'error', text: formatUserFriendlyError(err) }); } finally { setDeletingId(null); } };
+  const handleDeleteMember = async (target: FarmMember) => { if (!window.confirm('Permanently remove ' + target.displayName + ' from this farm? Their access records will be removed; the audit history is retained.')) return; setDeletingId(target.uid); try { await deleteStaffMember({ farmId: farm.farmId, target, actorUid: member.uid, actorName: member.displayName }); setEditingMember(null); setFeedback({ type: 'success', text: `Access for ${target.displayName} removed.` }); } catch (err) { setFeedback({ type: 'error', text: formatUserFriendlyError(err) }); } finally { setDeletingId(null); } };
+
   const handleInviteStaff = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -347,7 +372,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       const resolvedTitle = inviteTitle === 'Custom Role – Create your own' ? customInviteTitle.trim() : inviteTitle;
       if (!resolvedTitle) throw new Error('Enter a custom descriptive job title.');
-      await createStaffInvite({
+      const result = await createStaffInvite({
         farmId: farm.farmId,
         farmName: farm.name,
         email: inviteEmail,
@@ -358,10 +383,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         actorUid: member.uid,
         actorName: member.displayName,
       });
-      setFeedback({
-        type: 'success',
-        text: `Invitation created for ${inviteEmail}. When they sign in with Google using this email, they can accept access to ${farm.name}.`,
-      });
+      if (result.emailSent) {
+        setFeedback({
+          type: 'success',
+          text: `Invitation created! A sign-in email link has been sent to ${inviteEmail}. When they open the email and click the link, they can sign in and join ${farm.name} directly.`,
+        });
+      } else {
+        setFeedback({
+          type: 'success',
+          text: `Invitation created for ${inviteEmail}. (They can sign in directly with Google, or click their email link once Email Link sign-in is enabled in Firebase Console).`,
+        });
+      }
       setInviteEmail('');
       setCustomInviteTitle('');
       setInviteTitle('Farm Attendant');
@@ -372,6 +404,70 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleResendInvite = async (inv: FarmInvite) => {
+    setResendingInviteId(inv.id);
+    setFeedback(null);
+    try {
+      await resendStaffInviteEmail({
+        farmId: farm.farmId,
+        invite: inv,
+        actorUid: member.uid,
+        actorName: member.displayName,
+      });
+      setFeedback({
+        type: 'success',
+        text: `Sign-in email link resent to ${inv.emailLower}.`,
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    } finally {
+      setResendingInviteId(null);
+    }
+  };
+
+  const handleRevokeInvite = async (inv: FarmInvite) => {
+    if (!window.confirm(`Revoke invitation for ${inv.emailLower}?`)) return;
+    setFeedback(null);
+    try {
+      await revokeStaffInvite({
+        farmId: farm.farmId,
+        invite: inv,
+        actorUid: member.uid,
+        actorName: member.displayName,
+      });
+      setFeedback({
+        type: 'success',
+        text: `Invitation for ${inv.emailLower} has been revoked.`,
+      });
+    } catch (err) {
+      setFeedback({ type: 'error', text: formatUserFriendlyError(err) });
+    }
+  };
+
+  const handlePrefillReinvite = (inv: FarmInvite) => {
+    setInviteEmail(inv.emailLower);
+    if ((FARM_JOB_TITLES as readonly string[]).includes(inv.jobTitle)) {
+      setInviteTitle(inv.jobTitle);
+      setCustomInviteTitle('');
+    } else {
+      setInviteTitle('Custom Role – Create your own');
+      setCustomInviteTitle(inv.jobTitle);
+    }
+    setInvitePerms(inv.permissions ? normalizePermissions(inv.permissions) : structuredClone(DEFAULT_STAFF_PERMISSIONS));
+    setInviteDepartments(inv.departments && inv.departments.length > 0 ? [...inv.departments] : ['poultry']);
+    setInvitePenIds(inv.assignedPenIds ? [...inv.assignedPenIds] : []);
+    const formElement = document.getElementById('invite-staff-form');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth' });
+      const emailInput = document.getElementById('inv-email');
+      if (emailInput) emailInput.focus();
+    }
+    setFeedback({
+      type: 'success',
+      text: `Loaded details for ${inv.emailLower}. Review and click "Create Staff Invitation" to resend the invite.`,
+    });
   };
 
   const handleSaveMemberEdit = async (e: React.FormEvent) => {
@@ -414,6 +510,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           description: planDesc,
           planType,
           status: planStatus,
+          animalType: planAnimalType,
+          productionType: planProductionType,
+          productionStage: planProductionStage,
+          schedulingReference: planSchedulingReference,
           actorUid: member.uid,
           actorName: member.displayName,
         });
@@ -425,6 +525,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           description: planDesc,
           planType,
           actorUid: member.uid,
+          animalType: planAnimalType,
+          productionType: planProductionType,
+          productionStage: planProductionStage,
+          schedulingReference: planSchedulingReference,
           actorName: member.displayName,
         });
         setFeedback({ type: 'success', text: `Care plan "${planName}" created.` });
@@ -479,6 +583,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           intervalUnit: itemIntervalUnit,
           intervalValue,
           sortOrder,
+          careInformationId: itemCareInformationId,
+          category: itemCategory,
+          requiresApproval: itemRequiresApproval,
+          requiresVeterinaryApproval: itemRequiresVeterinaryApproval,
+          ageReference: itemAgeReference,
+          scheduleMode: itemAgeReference === "hatch" ? "age" : "calendar",
           actorUid: member.uid,
           actorName: member.displayName,
         });
@@ -495,6 +605,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           intervalUnit: itemIntervalUnit,
           intervalValue,
           sortOrder,
+          careInformationId: itemCareInformationId,
+          category: itemCategory,
+          requiresApproval: itemRequiresApproval,
+          requiresVeterinaryApproval: itemRequiresVeterinaryApproval,
+          ageReference: itemAgeReference,
+          scheduleMode: itemAgeReference === "hatch" ? "age" : "calendar",
           actorUid: member.uid,
           actorName: member.displayName,
         });
@@ -550,6 +666,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       { domain: 'settings', label: 'Farm Setup', keys: ['read', 'edit'] },
       { domain: 'members', label: 'Team Management', keys: ['read', 'manage'] },
       { domain: 'eggStore', label: 'Egg Store', keys: ['read', 'transfer', 'receive', 'sort', 'adjust', 'distribute', 'dispose'] },
+      { domain: 'care', label: 'Care Activities', keys: ['approve'] },
     ];
 
     return (
@@ -571,7 +688,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={() => toggle(r.domain, k)}
                       className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-800"
                     />
-                    <span className="capitalize">{k === 'overridePrice' ? 'Override Price' : k === 'approve' ? 'Approve Production' : k}</span>
+                    <span className="capitalize">{k === 'overridePrice' ? 'Override Price' : k === 'approve' ? (r.domain === 'care' ? 'Can approve care activities' : 'Approve Production') : k}</span>
                   </label>
                 ))}
               </div>
@@ -727,6 +844,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                             <Edit2 className="h-3.5 w-3.5" />
                           </button>
                         )}
+                        {canEditSettings && !p.activeBatchId && !batches.some((b) => b.penId === p.id) && (
+                          <button type="button" disabled={deletingId === p.id} onClick={() => void handleDeactivatePen(p)} className="ml-1 rounded border border-red-200 px-2 py-1 text-red-700 hover:bg-red-50" title="Deactivate unused pen" aria-label="Deactivate unused pen">
+                            <PowerOff className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -740,6 +862,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Care Plans & Schedules Tab */}
       {tab === 'careplans' && (
         <div className="space-y-6">
+          <CareInformationLibrary farmId={farm.farmId} member={member} records={careInformation} canEdit={canEditSettings} onFeedback={(next) => setFeedback(next)} />
           <div className="rounded-xl border border-slate-200 bg-white p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-3">
               <div>
@@ -757,6 +880,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     setPlanDesc('');
                     setPlanType('medication');
                     setPlanStatus('active');
+                    setPlanAnimalType("Chicken");
+                    setPlanProductionType("Layer");
+                    setPlanProductionStage("");
+                    setPlanSchedulingReference("placement");
                     setPlanModal(true);
                   }}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900 self-start sm:self-auto"
@@ -805,7 +932,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         )}
                         <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
                           <span className="capitalize font-medium text-slate-700">{p.planType} Plan</span>
-                          <span>•</span>
+                          <span>â€¢</span>
                           <span>
                             {p.createdAt && typeof p.createdAt === 'string'
                               ? `Created ${p.createdAt.split('T')[0]}`
@@ -850,6 +977,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                                 setPlanDesc(p.description || '');
                                 setPlanType(p.planType);
                                 setPlanStatus(p.status);
+                                setPlanAnimalType(p.animalType || "Chicken");
+                                setPlanProductionType(p.productionType || "");
+                                setPlanProductionStage(p.productionStage || "");
+                                setPlanSchedulingReference(p.schedulingReference || "placement");
                                 setPlanModal(true);
                               }}
                               className="rounded p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
@@ -904,6 +1035,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       setItemIntervalUnit('once');
                       setItemIntervalValue('1');
                       setItemSortOrder(String(activePlanItems.length));
+          setItemCareInformationId("");
+          setItemCategory("general");
+          setItemRequiresApproval(false);
+          setItemRequiresVeterinaryApproval(false);
+          setItemAgeReference(carePlans.find((p) => p.id === activePlanIdForItems)?.schedulingReference || "placement");
                       setItemModal(true);
                     }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900"
@@ -953,7 +1089,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                               </span>
                             )}
                           </td>
-                          <td className="py-2.5 text-slate-700">{item.dosageOrAction || '—'}</td>
+                          <td className="py-2.5 text-slate-700">{item.dosageOrAction || 'â€”'}</td>
                           <td className="py-2.5 text-right">
                             {canEditSettings && (
                               <div className="flex items-center justify-end gap-1.5">
@@ -969,6 +1105,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                                     setItemIntervalUnit(item.intervalUnit);
                                     setItemIntervalValue(String(item.intervalValue));
                                     setItemSortOrder(String(item.sortOrder));
+                                    setItemCareInformationId(item.careInformationId || "");
+                                    setItemCategory(item.category || "general");
+                                    setItemRequiresApproval(item.requiresApproval || false);
+                                    setItemRequiresVeterinaryApproval(item.requiresVeterinaryApproval || false);
+                                    setItemAgeReference(item.ageReference || "placement");
                                     setItemModal(true);
                                   }}
                                   className="rounded border border-slate-200 px-2 py-1 text-slate-700 hover:bg-slate-100"
@@ -1030,7 +1171,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           {feedItems.length === 0 ? (
             <p className="py-6 text-xs text-slate-500">
-              No feed items configured yet (e.g. Layer Mash — Topfeeds, 25 kg bag).
+              No feed items configured yet (e.g. Layer Mash â€” Topfeeds, 25 kg bag).
             </p>
           ) : (
             <div className="mt-3 overflow-x-auto">
@@ -1347,7 +1488,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {canManageMembers && (
-            <form onSubmit={handleInviteStaff} className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
+            <form id="invite-staff-form" onSubmit={handleInviteStaff} className="rounded-xl border border-slate-200 bg-white p-5 space-y-4">
               <div className="flex items-center gap-2">
                 <UserPlus className="h-4 w-4 text-emerald-800" />
                 <h2 className="text-sm font-semibold text-slate-900">Invite Staff Member</h2>
@@ -1384,7 +1525,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   >
                     {FARM_JOB_TITLES.map((title) => <option key={title} value={title}>{title}</option>)}
                   </select>
-                  {inviteTitle === 'Custom Role – Create your own' && (
+                  {inviteTitle === 'Custom Role â€“ Create your own' && (
                     <input
                       type="text"
                       required
@@ -1506,20 +1647,34 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         </td>
                         <td className="py-2 text-right">
                           {canManageMembers && inv.status === 'pending' && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                revokeStaffInvite({
-                                  farmId: farm.farmId,
-                                  invite: inv,
-                                  actorUid: member.uid,
-                                  actorName: member.displayName,
-                                })
-                              }
-                              className="rounded border border-red-200 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
-                            >
-                              Revoke
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                disabled={resendingInviteId === inv.id}
+                                onClick={() => handleResendInvite(inv)}
+                                className="rounded border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                              >
+                                {resendingInviteId === inv.id ? 'Sending…' : 'Resend Email'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRevokeInvite(inv)}
+                                className="rounded border border-red-200 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                              >
+                                Revoke
+                              </button>
+                            </div>
+                          )}
+                          {canManageMembers && (inv.status === 'revoked' || inv.status === 'rejected') && (
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handlePrefillReinvite(inv)}
+                                className="rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                              >
+                                Re-invite
+                              </button>
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -1869,6 +2024,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 )}
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="block text-xs font-medium text-slate-700">Animal Type *</label><input required maxLength={80} value={planAnimalType} onChange={(e)=>setPlanAnimalType(e.target.value)} placeholder="Chicken, Goat, Cattleâ€¦" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></div>
+                <div><label className="block text-xs font-medium text-slate-700">Production Type *</label><input required maxLength={80} value={planProductionType} onChange={(e)=>setPlanProductionType(e.target.value)} placeholder="Layer, Broiler, Dairyâ€¦" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></div>
+                <div><label className="block text-xs font-medium text-slate-700">Production Stage (optional)</label><input maxLength={80} value={planProductionStage} onChange={(e)=>setPlanProductionStage(e.target.value)} placeholder="Pullet, Grower, Adultâ€¦" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></div>
+                <div><label className="block text-xs font-medium text-slate-700">Schedule reference date</label><select value={planSchedulingReference} onChange={(e)=>setPlanSchedulingReference(e.target.value as CareAgeReference)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="placement">Placement</option><option value="hatch">Hatch / birth</option></select></div>
+              </div>
               <div>
                 <label className="block text-xs font-medium text-slate-700">Description</label>
                 <textarea
@@ -1905,6 +2066,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </button>
             </div>
             <form onSubmit={handleSaveItem} className="mt-4 space-y-3">
+              <div><label className="block text-xs font-medium text-slate-700">Care Information Library (optional)</label><select value={itemCareInformationId} onChange={(e) => { const id=e.target.value; setItemCareInformationId(id); const info=careInformation.find((record)=>record.id===id); if(info){ setItemTitle(info.title); setItemReminderType(info.reminderType); setItemCategory(info.category); setItemDosage(info.instructions); setItemNotes(info.notes); setItemRequiresVeterinaryApproval(info.requiresVeterinaryApproval); setItemRequiresApproval(info.requiresApproval||info.requiresVeterinaryApproval); setItemIntervalUnit(info.defaultIntervalUnit); setItemIntervalValue(String(info.defaultIntervalValue)); } }} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">Manual activity (not linked)</option>{careInformation.filter((record)=>record.status==='active').map((record)=><option key={record.id} value={record.id}>{record.title} â€” {record.animalApplicability==='all'?'ALL / GENERAL':record.animalTypes.join(', ')}</option>)}</select><p className="mt-1 text-[10px] text-slate-500">Specific-care activities are checked against the batch classification before schedule generation.</p></div>
               <div>
                 <label className="block text-xs font-medium text-slate-700">Task / Protocol Title *</label>
                 <input
@@ -1950,6 +2112,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs font-medium text-slate-700">Care category</label><select value={itemCategory} onChange={(e)=>setItemCategory(e.target.value as CareCategory)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="vaccination">Vaccination</option><option value="medication_health">Medication & health</option><option value="cleaning_sanitation">Cleaning & sanitation</option><option value="water_management">Water management</option><option value="animal_management">Animal management</option><option value="facility_maintenance">Equipment & facilities</option><option value="biosecurity">Biosecurity</option><option value="monitoring_production">Monitoring & production</option><option value="general">General farm management</option></select></div><div><label className="block text-xs font-medium text-slate-700">Age reference</label><select value={itemAgeReference} onChange={(e)=>setItemAgeReference(e.target.value as CareAgeReference)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="placement">Placement</option><option value="hatch">Hatch / birth</option><option value="custom">Custom date (uses placement until configured)</option></select></div></div>
+              <div className="flex flex-wrap gap-4 text-xs text-slate-700"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={itemRequiresApproval} onChange={(e)=>setItemRequiresApproval(e.target.checked)} />Completion requires approval</label><label className="inline-flex items-center gap-2"><input type="checkbox" checked={itemRequiresVeterinaryApproval} onChange={(e)=>setItemRequiresVeterinaryApproval(e.target.checked)} />Veterinary review required</label></div>
               <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
                 <label className="block text-xs font-semibold text-slate-800">Recurrence Rule</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -2123,6 +2287,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {renderPermissionMatrixEditor(editMemberPerms, setEditMemberPerms)}
               </div>
               <div className="flex justify-end gap-2 pt-3">
+                {editingMember.role === 'staff' && editingMember.uid !== member.uid && (
+                  <button type="button" disabled={deletingId === editingMember.uid} onClick={() => void handleDeleteMember(editingMember)} className="mr-auto rounded-lg border border-red-200 px-4 py-2 text-xs font-medium text-red-700 hover:bg-red-50">
+                    Delete access
+                  </button>
+                )}
                 <button type="button" onClick={() => setEditingMember(null)} className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-medium">
                   Cancel
                 </button>
@@ -2137,3 +2306,4 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     </div>
   );
 };
+

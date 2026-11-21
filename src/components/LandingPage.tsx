@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
-import { ArrowRight, CheckCircle2, ClipboardList, ShieldCheck, Wheat } from 'lucide-react';
+import { ArrowRight, CheckCircle2, ClipboardList, Mail, ShieldCheck, Wheat } from 'lucide-react';
+import { formatUserFriendlyError } from '../lib/firebase.ts';
 
 interface LandingPageProps {
   onSignIn: () => Promise<void>;
+  onSendEmailLink?: (email: string) => Promise<void>;
   authError: string | null;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, onSendEmailLink, authError }) => {
   const [signingIn, setSigningIn] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [emailInput, setEmailInput] = useState('');
+  const [sendingLink, setSendingLink] = useState(false);
+  const [linkSentSuccess, setLinkSentSuccess] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const handleSignInClick = async () => {
     setSigningIn(true);
@@ -15,6 +22,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError })
       await onSignIn();
     } finally {
       setSigningIn(false);
+    }
+  };
+
+  const handleSendEmailLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onSendEmailLink || !emailInput.trim()) return;
+    setSendingLink(true);
+    setLinkSentSuccess(null);
+    setLinkError(null);
+    try {
+      await onSendEmailLink(emailInput.trim());
+      setLinkSentSuccess(`Sign-in link sent to ${emailInput.trim()}! Please check your email inbox and click the link to log in.`);
+      setEmailInput('');
+    } catch (err) {
+      setLinkError(formatUserFriendlyError(err));
+    } finally {
+      setSendingLink(false);
     }
   };
 
@@ -107,6 +131,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError })
                   <span>{signingIn ? 'Signing in with Google...' : 'Sign in with Google'}</span>
                   <ArrowRight className="h-4 w-4" />
                 </button>
+                {onSendEmailLink && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowEmailForm((prev) => !prev);
+                      setLinkSentSuccess(null);
+                      setLinkError(null);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    <Mail className="h-4 w-4 text-emerald-800" />
+                    <span>{showEmailForm ? 'Hide Email Link' : 'Sign in with Email Link'}</span>
+                  </button>
+                )}
                 <a
                   href="#operations"
                   className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
@@ -114,6 +152,41 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onSignIn, authError })
                   Review MVP Scope
                 </a>
               </div>
+
+              {showEmailForm && (
+                <form onSubmit={handleSendEmailLink} className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 max-w-lg">
+                  <p className="text-xs font-medium text-slate-800">
+                    Invited staff or passwordless login: Enter your email to receive a secure sign-in magic link.
+                  </p>
+                  <div className="mt-2.5 flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="email"
+                      required
+                      value={emailInput}
+                      onChange={(e) => setEmailInput(e.target.value)}
+                      placeholder="you@example.com"
+                      className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:outline-emerald-800"
+                    />
+                    <button
+                      type="submit"
+                      disabled={sendingLink}
+                      className="rounded-lg bg-emerald-800 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-900 disabled:opacity-60 whitespace-nowrap"
+                    >
+                      {sendingLink ? 'Sending link…' : 'Send sign-in link'}
+                    </button>
+                  </div>
+                  {linkSentSuccess && (
+                    <div className="mt-2 text-xs font-medium text-emerald-800 bg-emerald-100/80 p-2 rounded">
+                      {linkSentSuccess}
+                    </div>
+                  )}
+                  {linkError && (
+                    <div className="mt-2 text-xs font-medium text-red-700 bg-red-100/80 p-2 rounded">
+                      {linkError}
+                    </div>
+                  )}
+                </form>
+              )}
 
               <div className="mt-8 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-200 pt-5 text-xs text-slate-500">
                 <span>Poultry Layer Active</span>

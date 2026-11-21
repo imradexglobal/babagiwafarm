@@ -7,7 +7,15 @@ import {
   writeBatch,
   serverTimestamp,
 } from 'firebase/firestore';
-import { signInWithPopup as authSignInWithPopup, signOut as authSignOut, type User } from 'firebase/auth';
+import {
+  signInWithPopup as authSignInWithPopup,
+  signOut as authSignOut,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
+  type ActionCodeSettings,
+  type User,
+} from 'firebase/auth';
 import {
   DEFAULT_TIMEZONE,
   OWNER_FULL_PERMISSIONS,
@@ -34,6 +42,55 @@ export function buildUserDocumentId(farmId: string, displayName: string): string
 
 export async function signInWithGoogle(): Promise<User> {
   const cred = await authSignInWithPopup(auth, googleProvider);
+  return cred.user;
+}
+
+export function getActionCodeSettings(email: string): ActionCodeSettings {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://babagiwafarm.web.app';
+  return {
+    url: `${origin}/?email=${encodeURIComponent(email)}`,
+    handleCodeInApp: true,
+  };
+}
+
+export async function sendStaffSignInLink(email: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  const settings = getActionCodeSettings(cleanEmail);
+  await sendSignInLinkToEmail(auth, cleanEmail, settings);
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem('emailForSignIn', cleanEmail);
+  }
+}
+
+export function checkIsSignInWithEmailLink(href: string): boolean {
+  return isSignInWithEmailLink(auth, href);
+}
+
+export async function completeSignInWithEmailLink(href: string, fallbackEmail?: string): Promise<User> {
+  let email: string | null = null;
+  if (typeof window !== 'undefined') {
+    const urlParams = new URLSearchParams(window.location.search);
+    email = urlParams.get('email');
+    if (!email && fallbackEmail) {
+      email = fallbackEmail;
+    }
+    if (!email) {
+      email = window.localStorage.getItem('emailForSignIn');
+    }
+    if (!email) {
+      email = window.prompt('Please enter your invited email address to complete sign in:');
+    }
+  }
+  if (!email) {
+    throw new Error('An email address is required to complete sign-in from your email link.');
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cred = await signInWithEmailLink(auth, cleanEmail, href);
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('emailForSignIn');
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
   return cred.user;
 }
 

@@ -106,7 +106,13 @@ export function formatUserFriendlyError(err: unknown): string {
     return 'This app domain is not authorized for Firebase Authentication. In Firebase Console, open Authentication → Settings → Authorized domains and add the hostname you are using (for example, localhost or 127.0.0.1).';
   }
   if (authCode === 'auth/operation-not-allowed') {
-    return 'Google sign-in is disabled for Firebase project “babagiwafarm”. In Firebase Console, open Authentication → Sign-in method, enable Google, choose a support email, and save.';
+    return 'Sign-in method or Email Link authentication is disabled for Firebase project “babagiwafarm”. In Firebase Console, open Authentication → Sign-in method, ensure Google is enabled, and under Email/Password enable “Email link (passwordless sign-in)”.';
+  }
+  if (authCode === 'auth/invalid-action-code') {
+    return 'The sign-in link is invalid or has already been used. Please ask your farm owner to resend the invite or sign in directly.';
+  }
+  if (authCode === 'auth/expired-action-code') {
+    return 'The sign-in link has expired. Please ask your farm owner to resend the invite or sign in directly.';
   }
   try {
     const parsed = JSON.parse(err.message) as Partial<FirestoreErrorInfo>;

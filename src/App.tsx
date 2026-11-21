@@ -17,6 +17,7 @@ const PurchasesView = lazyNamed(() => import('./components/PurchasesView.tsx'), 
 const ReportsView = lazyNamed(() => import('./components/ReportsView.tsx'), 'ReportsView');
 const SalesView = lazyNamed(() => import('./components/SalesView.tsx'), 'SalesView');
 const SettingsView = lazyNamed(() => import('./components/SettingsView.tsx'), 'SettingsView');
+const ImportExportView = lazyNamed(() => import('./components/ImportExportView.tsx'), 'ImportExportView');
 import { formatDateInTimezone, hasPermission } from './domain/calculations.ts';
 import { useFirebaseSyncStatus } from './hooks/useFirebaseSyncStatus.ts';
 import { auth, formatUserFriendlyError } from './lib/firebase.ts';
@@ -32,9 +33,13 @@ import {
   signOutUser,
   subscribeCurrentMember,
   subscribeFarmProfile,
+  checkIsSignInWithEmailLink,
+  completeSignInWithEmailLink,
+  sendStaffSignInLink,
 } from './services/authService.ts';
 import { subscribeBatches } from './services/batchService.ts';
 import { subscribeCarePlans } from './services/carePlanService.ts';
+import { subscribeCareInformation } from './services/careInformationService.ts';
 import {
   subscribeEnvironmentLogs,
   subscribeMedicationLogs,
@@ -73,6 +78,7 @@ import {
 import type {
   AuditLog,
   CarePlan,
+  CareInformation,
   EggProductionEntry,
   EggSale,
   EnvironmentMetricLog,
@@ -114,6 +120,7 @@ export default function App() {
   const [authReady, setAuthReady] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [emailLinkSigningIn, setEmailLinkSigningIn] = useState(false);
 
   const [bindingLoading, setBindingLoading] = useState(false);
   const [userBinding, setUserBinding] = useState<UserFarmBinding | null>(null);
@@ -137,6 +144,7 @@ export default function App() {
   const [salesUnits, setSalesUnits] = useState<SalesUnit[]>([]);
   const [batches, setBatches] = useState<PoultryBatch[]>([]);
   const [carePlans, setCarePlans] = useState<CarePlan[]>([]);
+  const [careInformation, setCareInformation] = useState<CareInformation[]>([]);
   const [production, setProduction] = useState<EggProductionEntry[]>([]);
   const [purchases, setPurchases] = useState<FeedPurchase[]>([]);
   const [farmPurchases, setFarmPurchases] = useState<FarmPurchase[]>([]);
@@ -191,6 +199,24 @@ export default function App() {
     }
   }, []);
 
+  // Handle passwordless email link sign-in on page load (e.g. from invited staff email)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && checkIsSignInWithEmailLink(window.location.href)) {
+      setEmailLinkSigningIn(true);
+      setAuthError(null);
+      completeSignInWithEmailLink(window.location.href)
+        .then((signedInUser) => {
+          setUser(signedInUser);
+        })
+        .catch((err) => {
+          setAuthError(formatUserFriendlyError(err));
+        })
+        .finally(() => {
+          setEmailLinkSigningIn(false);
+        });
+    }
+  }, []);
+
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (nextUser) => {
       setUser(nextUser);
@@ -207,6 +233,8 @@ export default function App() {
         setFeedStocks([]);
         setSalesUnits([]);
         setBatches([]);
+        setCarePlans([]);
+        setCareInformation([]);
         setProduction([]);
         setPurchases([]);
         setFarmPurchases([]);
@@ -321,6 +349,7 @@ export default function App() {
     unsubs.push(subscribeSalesUnits(farmId, setSalesUnits, onErr));
     unsubs.push(subscribeBatches(farmId, setBatches, onErr));
     unsubs.push(subscribeCarePlans(farmId, setCarePlans, onErr));
+    unsubs.push(subscribeCareInformation(farmId, setCareInformation, onErr));
     unsubs.push(subscribeRecordDrafts(farmId, setDrafts, onErr));
 
     const canReadReports = hasPermission(member, 'reports', 'read') || member.role === 'owner';
@@ -483,6 +512,18 @@ export default function App() {
     setPendingInvite(null);
   };
 
+  if (emailLinkSigningIn) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-emerald-800 animate-spin">
+          <RefreshCw className="h-6 w-6" />
+        </div>
+        <h2 className="mt-4 text-base font-semibold text-slate-900">Verifying your email sign-in link…</h2>
+        <p className="mt-1 text-xs text-slate-500">Signing you in to Babagiwa Farms. Please wait a moment.</p>
+      </div>
+    );
+  }
+
   if (!authReady || (user && bindingLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
@@ -495,7 +536,7 @@ export default function App() {
   }
 
   if (!user) {
-    return <LandingPage onSignIn={handleSignIn} authError={authError} />;
+    return <LandingPage onSignIn={handleSignIn} onSendEmailLink={sendStaffSignInLink} authError={authError} />;
   }
 
   if (!userBinding) {
@@ -612,9 +653,9 @@ export default function App() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
         <div className="max-w-md rounded-xl border border-red-200 bg-white p-6 text-center">
-          <h1 className="text-lg font-bold text-slate-900">Farm Membership Inactive</h1>
+          <h1 className="text-lg font-bold text-slate-900">Access Restricted</h1>
           <p className="mt-2 text-sm text-slate-600">
-            Your access to <strong>{farm.name}</strong> has been deactivated by the farm owner.
+            Your access to <strong>{farm.name}</strong> has been revoked. Contact the farm administrator at <a className="font-semibold text-emerald-800 underline" href={`mailto:${farm.contactEmail}`}>{farm.contactEmail}</a> to restore access, or create a new farm.
           </p>
           <button
             type="button"
@@ -775,6 +816,7 @@ export default function App() {
           farmPurchases={farmPurchases}
           mortalityEntries={mortalityEntries}
           carePlans={carePlans}
+          careInformation={careInformation}
           onOpenMortality={handleOpenMortality}
         />
       )}
@@ -801,6 +843,31 @@ export default function App() {
           members={members}
           invites={invites}
           carePlans={carePlans}
+          careInformation={careInformation}
+        />
+      )}
+
+      {activeSection === 'importExport' && (
+        <ImportExportView
+          farm={farm}
+          member={member}
+          pens={pens}
+          feedItems={feedItems}
+          feedStocks={feedStocks}
+          salesUnits={salesUnits}
+          batches={batches}
+          carePlans={carePlans}
+          production={production}
+          purchases={purchases}
+          farmPurchases={farmPurchases}
+          consumptions={consumptions}
+          sales={sales}
+          mortalityEntries={mortalityEntries}
+          medicationLogs={medicationLogs}
+          environmentLogs={environmentLogs}
+          farmReminders={farmReminders}
+          customers={customers}
+          vendors={vendors}
         />
       )}
       </Suspense>

@@ -223,7 +223,12 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
 
   // Shared context fields in workbench
   const [txDate, setTxDate] = useState(todayStr);
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>('morning');
+  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(() => {
+    const h = new Date().getHours();
+    if (h < 12) return 'morning';
+    if (h < 18) return 'afternoon';
+    return 'night';
+  });
   const [txTime, setTxTime] = useState('');
   const [selectedBatchId, setSelectedBatchId] = useState('');
 
@@ -2150,45 +2155,141 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Hub Page Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            {onBackToBatches && (
-              <button
-                type="button"
-                onClick={onBackToBatches}
-                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
-              >
-                ← Back to Batches
-              </button>
-            )}
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Daily Records</h1>
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Consolidated hub for Egg Production, Feed Consumption, Medication, Mortality, Weight,
-            and Environment (Temp/Humidity). Save drafts anytime; reports aggregate all daily entries.
-          </p>
-        </div>
-
-        {canCreateAny && (
+      {/* Page Header */}
+      <div className="flex items-center gap-3">
+        {onBackToBatches && (
           <button
             type="button"
-            onClick={() => {
-              if (collectorOpen) {
-                setCollectorOpen(false);
-              } else {
-                openCollector({ focusSection: subTab });
-              }
-            }}
-            disabled={activeBatches.length === 0 && !collectorOpen}
-            className="inline-flex items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-900 disabled:opacity-50 whitespace-nowrap shrink-0"
+            onClick={onBackToBatches}
+            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 whitespace-nowrap shrink-0"
           >
-            {collectorOpen ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            <span>{collectorOpen ? 'Close Entry Form' : 'Record Daily Entry'}</span>
+            ← Back to Batches
           </button>
         )}
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Daily Records</h1>
       </div>
+
+      {/* TODAY AT A GLANCE — summary stats for today */}
+      {activeBatches.length > 0 && (() => {
+        const todayProd = production.filter((e) => !e.isVoided && e.transactionDate === todayStr);
+        const todayCons = consumptions.filter((c) => !c.isVoided && c.transactionDate === todayStr);
+        const todayMort = mortalityEntries.filter((m) => !m.isVoided && m.transactionDate === todayStr);
+        const todayMeds = medicationLogs.filter((m) => !m.isVoided && m.transactionDate === todayStr);
+        const todayIntact = todayProd.reduce((s, e) => s + e.intactEggs, 0);
+        const todayFeedKg = todayCons.reduce((s, c) => s + c.standardizedGrams, 0) / 1000;
+        const todayDeaths = todayMort.reduce((s, m) => s + m.mortalityCount, 0);
+        return (
+          <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-emerald-50 to-white p-4 shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Today at a Glance</p>
+              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800">{formatIsoDateDisplay(todayStr)}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-xl bg-white border border-slate-100 p-3 shadow-xs">
+                <div className="flex items-center gap-2 mb-1">
+                  <Egg className="h-4 w-4 text-emerald-700" />
+                  <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Eggs Today</span>
+                </div>
+                <p className="font-mono text-xl font-bold text-emerald-800">{formatEggCountInCrates(todayIntact)}</p>
+                <p className="text-[11px] text-slate-400">{todayProd.length} session{todayProd.length !== 1 ? 's' : ''}</p>
+              </div>
+              <div className="rounded-xl bg-white border border-slate-100 p-3 shadow-xs">
+                <div className="flex items-center gap-2 mb-1">
+                  <Wheat className="h-4 w-4 text-amber-600" />
+                  <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Feed Given</span>
+                </div>
+                <p className="font-mono text-xl font-bold text-amber-700">{todayFeedKg.toFixed(1)} kg</p>
+                <p className="text-[11px] text-slate-400">{todayCons.length} issue{todayCons.length !== 1 ? 's' : ''}</p>
+              </div>
+              <div className={`rounded-xl bg-white border p-3 shadow-xs ${todayDeaths > 0 ? 'border-red-200' : 'border-slate-100'}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <HeartPulse className={`h-4 w-4 ${todayDeaths > 0 ? 'text-red-600' : 'text-slate-400'}`} />
+                  <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Mortality</span>
+                </div>
+                <p className={`font-mono text-xl font-bold ${todayDeaths > 0 ? 'text-red-700' : 'text-slate-400'}`}>{todayDeaths}</p>
+                <p className="text-[11px] text-slate-400">{todayDeaths === 0 ? 'No losses' : `${todayMort.length} entr${todayMort.length !== 1 ? 'ies' : 'y'}`}</p>
+              </div>
+              <div className={`rounded-xl bg-white border p-3 shadow-xs ${todayMeds.length > 0 ? 'border-blue-200' : 'border-slate-100'}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <Pill className={`h-4 w-4 ${todayMeds.length > 0 ? 'text-blue-600' : 'text-slate-400'}`} />
+                  <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Medication</span>
+                </div>
+                <p className={`font-mono text-xl font-bold ${todayMeds.length > 0 ? 'text-blue-700' : 'text-slate-400'}`}>{todayMeds.length}</p>
+                <p className="text-[11px] text-slate-400">{todayMeds.length === 0 ? 'None today' : `treatment${todayMeds.length !== 1 ? 's' : ''}`}</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* QUICK ACTION BUTTONS */}
+      {canCreateAny && activeBatches.length > 0 && (
+        <div>
+          <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500">Quick Log</p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {canCreateProd && (
+              <button
+                type="button"
+                onClick={() => openCollector({ focusSection: 'egg' })}
+                className="group flex flex-col items-center gap-2 rounded-2xl border-2 border-emerald-200 bg-emerald-50 p-4 text-center transition-all hover:border-emerald-500 hover:bg-emerald-100 active:scale-95"
+              >
+                <div className="rounded-xl bg-emerald-700 p-3 shadow-sm group-hover:bg-emerald-800 transition-colors">
+                  <Egg className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-emerald-900">Log Eggs</p>
+                  <p className="text-[11px] text-emerald-700">Record pickup</p>
+                </div>
+              </button>
+            )}
+            {canCreateFeed && (
+              <button
+                type="button"
+                onClick={() => openCollector({ focusSection: 'feed' })}
+                className="group flex flex-col items-center gap-2 rounded-2xl border-2 border-amber-200 bg-amber-50 p-4 text-center transition-all hover:border-amber-500 hover:bg-amber-100 active:scale-95"
+              >
+                <div className="rounded-xl bg-amber-600 p-3 shadow-sm group-hover:bg-amber-700 transition-colors">
+                  <Wheat className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-amber-900">Record Feed</p>
+                  <p className="text-[11px] text-amber-700">Log consumption</p>
+                </div>
+              </button>
+            )}
+            {canCreateMortality && (
+              <button
+                type="button"
+                onClick={() => openCollector({ focusSection: 'mortality' })}
+                className="group flex flex-col items-center gap-2 rounded-2xl border-2 border-red-200 bg-red-50 p-4 text-center transition-all hover:border-red-400 hover:bg-red-100 active:scale-95"
+              >
+                <div className="rounded-xl bg-red-600 p-3 shadow-sm group-hover:bg-red-700 transition-colors">
+                  <HeartPulse className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-red-900">Report Death</p>
+                  <p className="text-[11px] text-red-700">Mortality entry</p>
+                </div>
+              </button>
+            )}
+            {canCreateProd && (
+              <button
+                type="button"
+                onClick={() => openCollector({ focusSection: 'medication' })}
+                className="group flex flex-col items-center gap-2 rounded-2xl border-2 border-blue-200 bg-blue-50 p-4 text-center transition-all hover:border-blue-400 hover:bg-blue-100 active:scale-95"
+              >
+                <div className="rounded-xl bg-blue-600 p-3 shadow-sm group-hover:bg-blue-700 transition-colors">
+                  <Pill className="h-6 w-6 text-white" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-blue-900">Health Log</p>
+                  <p className="text-[11px] text-blue-700">Meds, weight, temp</p>
+                </div>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -2265,12 +2366,19 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
         </div>
       )}
 
-      {/* CONSOLIDATED DAILY ENTRY WORKBENCH (Inline Grouped Form + Section Tabs) */}
+      {/* CONSOLIDATED DAILY ENTRY WORKBENCH — Full-screen overlay modal */}
       {collectorOpen && canCreateAny && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-sm p-0 sm:p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setCollectorOpen(false); }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Daily Records Entry Workbench"
+        >
         <section
           ref={workbenchRef}
           aria-label="Daily Records Entry Workbench"
-          className="rounded-xl border border-emerald-800/30 bg-white p-5 sm:p-6"
+          className="max-h-[92vh] sm:max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-emerald-800/30 bg-white p-5 sm:p-6 shadow-2xl pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] sm:pb-6"
         >
           <div className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -2522,40 +2630,99 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
             </div>
           </form>
         </section>
+        </div>
       )}
 
-      {/* Ledger & Trends Sub-Navigation Tabs (Zero-Pill Counts) */}
-      <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white p-1.5 overflow-x-auto no-scrollbar touch-scroll sm:flex-wrap">
-        {visibleSubTabs.map((t) => {
-          const Icon = t.Icon;
-          const active = effectiveSubTab === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setSubTab(t.id)}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                active
-                  ? 'bg-emerald-800 text-white'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span>{t.label}</span>
-              <span
-                className={`font-mono text-[11px] tabular-nums ${
-                  active ? 'text-emerald-200' : 'text-slate-400'
-                }`}
-              >
-                {t.countLabel ?? t.count}
-              </span>
-            </button>
-          );
-        })}
+      {/* Ledger Sub-Navigation — 3 grouped tabs */}
+      <div>
+        <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-slate-500">Records Ledger</p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {/* Group 1: Production & Feed */}
+          {(visibleSubTabs.some(t => t.id === 'egg') || visibleSubTabs.some(t => t.id === 'feed')) && (
+            <div className="flex-1">
+              <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Production & Feed</p>
+              <div className="flex gap-1 rounded-xl border border-slate-200 bg-white p-1 overflow-x-auto no-scrollbar">
+                {visibleSubTabs.filter(t => ['egg', 'feed'].includes(t.id)).map((t) => {
+                  const Icon = t.Icon;
+                  const active = effectiveSubTab === t.id;
+                  return (
+                    <button key={t.id} type="button" onClick={() => setSubTab(t.id)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        active ? 'bg-emerald-800 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t.label}</span>
+                      <span className={`font-mono text-[11px] tabular-nums ${active ? 'text-emerald-200' : 'text-slate-400'}`}>{t.countLabel ?? t.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Group 2: Flock Health */}
+          {visibleSubTabs.some(t => ['mortality', 'medication', 'weight', 'environment'].includes(t.id)) && (
+            <div className="flex-1">
+              <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Flock Health</p>
+              <div className="flex gap-1 rounded-xl border border-slate-200 bg-white p-1 overflow-x-auto no-scrollbar">
+                {visibleSubTabs.filter(t => ['mortality', 'medication', 'weight', 'environment'].includes(t.id)).map((t) => {
+                  const Icon = t.Icon;
+                  const active = effectiveSubTab === t.id;
+                  return (
+                    <button key={t.id} type="button" onClick={() => setSubTab(t.id)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        active ? 'bg-emerald-800 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t.shortLabel ?? t.label}</span>
+                      <span className={`font-mono text-[11px] tabular-nums ${active ? 'text-emerald-200' : 'text-slate-400'}`}>{t.countLabel ?? t.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Group 3: Insights & Reminders */}
+          {visibleSubTabs.some(t => ['trends', 'reminders'].includes(t.id)) && (
+            <div className="flex-1">
+              <p className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Insights</p>
+              <div className="flex gap-1 rounded-xl border border-slate-200 bg-white p-1 overflow-x-auto no-scrollbar">
+                {visibleSubTabs.filter(t => ['trends', 'reminders'].includes(t.id)).map((t) => {
+                  const Icon = t.Icon;
+                  const active = effectiveSubTab === t.id;
+                  const hasUrgent = t.id === 'reminders' && urgentRemindersCount > 0;
+                  return (
+                    <button key={t.id} type="button" onClick={() => setSubTab(t.id)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        active ? 'bg-emerald-800 text-white' : hasUrgent ? 'text-amber-800 bg-amber-50 hover:bg-amber-100' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{t.label}</span>
+                      <span className={`font-mono text-[11px] tabular-nums ${active ? 'text-emerald-200' : hasUrgent ? 'font-bold text-amber-700' : 'text-slate-400'}`}>{t.countLabel ?? t.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Shared Filters */}
-      <div className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-5">
+      {/* Shared Filters — Collapsible */}
+      <details className="group rounded-xl border border-slate-200 bg-white">
+        <summary className="flex cursor-pointer items-center justify-between p-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 rounded-xl select-none">
+          <span className="flex items-center gap-2">
+            <Calendar className="h-3.5 w-3.5 text-slate-500" />
+            Filter Records
+          </span>
+          <svg className="h-4 w-4 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+        </summary>
+        <div className="border-t border-slate-100 p-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div>
           <label htmlFor="dp-start" className="block text-xs font-medium text-slate-600">
             From Date
@@ -2642,7 +2809,9 @@ export const DailyProductionView: React.FC<DailyProductionViewProps> = ({
             <span>Include voided entries</span>
           </label>
         </div>
-      </div>
+        </div>
+        </div>
+      </details>
 
       {/* TAB 1: EGG PRODUCTION */}
       {effectiveSubTab === 'egg' && (

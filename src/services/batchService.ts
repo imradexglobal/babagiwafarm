@@ -1,13 +1,18 @@
 import {
   collection,
   doc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
   runTransaction,
   serverTimestamp,
+  where,
+  writeBatch,
 } from 'firebase/firestore';
 import { generateId, toCodeKey } from '../domain/calculations.ts';
+import { resolveBatchCareClassification } from '../domain/careSchedule.ts';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type { FarmMember, Pen, PoultryBatch } from '../types/farm.ts';
 import { buildAuditLogEntry } from './auditHelper.ts';
@@ -17,6 +22,9 @@ export async function createBatch(params: {
   batchCode: string;
   penId: string;
   birdType: string;
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
   breed: string;
   strain?: string;
   source: string;
@@ -52,6 +60,12 @@ export async function createBatch(params: {
   }
 
   const batchId = generateId('batch');
+  const classification = resolveBatchCareClassification({
+    birdType: params.birdType,
+    animalType: params.animalType,
+    productionType: params.productionType,
+    productionStage: params.productionStage,
+  });
   const codeKey = toCodeKey(batchCode);
   const penRef = doc(db, 'farms', params.farmId, 'pens', params.penId);
   const codeLockRef = doc(db, 'farms', params.farmId, 'batchCodes', codeKey);
@@ -95,6 +109,9 @@ export async function createBatch(params: {
         penId: pen.id,
         penNameSnapshot: pen.name.slice(0, 80),
         birdType: (params.birdType.trim() || 'Layer').slice(0, 60),
+        animalType: (params.animalType?.trim() || classification.animalType).slice(0, 80),
+        productionType: (params.productionType?.trim() || classification.productionType).slice(0, 80),
+        productionStage: (params.productionStage?.trim() || classification.productionStage).slice(0, 80),
         breed: params.breed.trim().slice(0, 80),
         strain: (params.strain || '').trim().slice(0, 80),
         source: params.source.trim().slice(0, 120),
@@ -140,6 +157,9 @@ export async function updateBatch(params: {
   batch: PoultryBatch;
   penId: string;
   birdType: string;
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
   breed: string;
   strain?: string;
   source: string;
@@ -160,6 +180,13 @@ export async function updateBatch(params: {
   if (params.maleCount + params.femaleCount > params.initialCount) {
     throw new Error('Male + female counts cannot exceed initial count.');
   }
+
+  const classification = resolveBatchCareClassification({
+    birdType: params.birdType,
+    animalType: params.animalType,
+    productionType: params.productionType,
+    productionStage: params.productionStage,
+  });
 
   const batchRef = doc(db, 'farms', params.farmId, 'batches', params.batch.id);
   const oldPenRef = doc(db, 'farms', params.farmId, 'pens', params.batch.penId);
@@ -205,6 +232,9 @@ export async function updateBatch(params: {
         penId: targetPen.id,
         penNameSnapshot: targetPen.name.slice(0, 80),
         birdType: (params.birdType.trim() || 'Layer').slice(0, 60),
+        animalType: (params.animalType?.trim() || classification.animalType).slice(0, 80),
+        productionType: (params.productionType?.trim() || classification.productionType).slice(0, 80),
+        productionStage: (params.productionStage?.trim() || classification.productionStage).slice(0, 80),
         breed: params.breed.trim().slice(0, 80),
         strain: (params.strain || '').trim().slice(0, 80),
         source: params.source.trim().slice(0, 120),
@@ -290,6 +320,13 @@ export async function deactivateBatch(params: {
   }
 }
 
+export async function archiveUnusedBatch(params: { farmId: string; batch: PoultryBatch; actorUid: string; actorName: string }): Promise<void> {
+  const names = ['eggProduction','feedConsumption','eggSales','farmPurchases','mortalityEntries','medicationLogs','environmentLogs','farmReminders','eggTransfers','eggStoreReceipts'];
+  const checks = await Promise.all(names.map((name) => getDocs(query(collection(db, 'farms', params.farmId, name), where('batchId', '==', params.batch.id), limit(1)))))
+  if (checks.some((snap) => !snap.empty)) throw new Error('This batch has usage or historical records. Use Deactivate to preserve its history.');
+  await deactivateBatch(params);
+}
+
 export async function closeoutBatch(params: {
   farmId: string;
   batch: PoultryBatch;
@@ -354,3 +391,4 @@ export function subscribeBatches(
     }
   );
 }
+

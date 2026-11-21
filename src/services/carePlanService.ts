@@ -14,6 +14,9 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type {
   CarePlan,
   CarePlanItem,
+  CareAgeReference,
+  CareCategory,
+  CareScheduleMode,
   RecurrenceUnit,
   ReminderType,
 } from '../types/farm.ts';
@@ -29,6 +32,13 @@ export async function createCarePlan(params: {
   name: string;
   description: string;
   planType: 'medication' | 'vaccination' | 'activity';
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
+  productionStages?: string[];
+  schedulingReference?: CareAgeReference;
+  status?: 'active' | 'inactive';
+  isLegacyDraft?: boolean;
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -48,7 +58,13 @@ export async function createCarePlan(params: {
     name,
     description,
     planType: params.planType,
-    status: 'active',
+    animalType: (params.animalType || 'Chicken').trim().slice(0, 80),
+    productionType: (params.productionType || '').trim().slice(0, 80),
+    productionStage: (params.productionStage || '').trim().slice(0, 80),
+    productionStages: (params.productionStages || []).map((v) => v.trim().slice(0, 80)).filter(Boolean).slice(0, 12),
+    schedulingReference: params.schedulingReference || 'placement',
+    isLegacyDraft: params.isLegacyDraft || false,
+    status: params.status || 'active',
     createdBy: params.actorUid,
     createdByName: params.actorName.slice(0, 150),
     updatedBy: params.actorUid,
@@ -83,6 +99,12 @@ export async function updateCarePlan(params: {
   description: string;
   planType: 'medication' | 'vaccination' | 'activity';
   status: 'active' | 'inactive';
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
+  productionStages?: string[];
+  schedulingReference?: CareAgeReference;
+  isLegacyDraft?: boolean;
   actorUid: string;
   actorName: string;
 }): Promise<void> {
@@ -99,6 +121,12 @@ export async function updateCarePlan(params: {
     description,
     planType: params.planType,
     status: params.status,
+    animalType: (params.animalType || params.plan.animalType || 'Chicken').trim().slice(0, 80),
+    productionType: (params.productionType || params.plan.productionType || '').trim().slice(0, 80),
+    productionStage: (params.productionStage || params.plan.productionStage || '').trim().slice(0, 80),
+    productionStages: (params.productionStages || params.plan.productionStages || []).map((v) => v.trim().slice(0, 80)).filter(Boolean).slice(0, 12),
+    schedulingReference: params.schedulingReference || params.plan.schedulingReference || 'placement',
+    isLegacyDraft: params.isLegacyDraft ?? params.plan.isLegacyDraft ?? false,
     updatedBy: params.actorUid,
     updatedAt: serverTimestamp(),
   };
@@ -135,6 +163,17 @@ export async function createCarePlanItem(params: {
   intervalUnit: RecurrenceUnit;
   intervalValue: number;
   sortOrder: number;
+  careInformationId?: string;
+  category?: CareCategory;
+  requiresApproval?: boolean;
+  requiresVeterinaryApproval?: boolean;
+  scheduleMode?: CareScheduleMode;
+  ageReference?: CareAgeReference;
+  selectedWeekdays?: number[];
+  endDate?: string;
+  endAgeDays?: number | null;
+  occurrenceLimit?: number | null;
+  eventTrigger?: string;
   actorUid: string;
   actorName: string;
 }): Promise<string> {
@@ -171,6 +210,17 @@ export async function createCarePlanItem(params: {
       intervalUnit: params.intervalUnit,
       intervalValue,
       sortOrder: params.sortOrder,
+      careInformationId: params.careInformationId || '',
+      category: params.category || (params.reminderType === 'vaccination' ? 'vaccination' : params.reminderType === 'medication' ? 'medication_health' : 'general'),
+      requiresApproval: params.requiresApproval || false,
+      requiresVeterinaryApproval: params.requiresVeterinaryApproval || false,
+      scheduleMode: params.scheduleMode || 'calendar',
+      ageReference: params.ageReference || 'placement',
+      selectedWeekdays: (params.selectedWeekdays || []).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6).slice(0, 7),
+      endDate: params.endDate || '',
+      endAgeDays: params.endAgeDays ?? null,
+      occurrenceLimit: params.occurrenceLimit ?? null,
+      eventTrigger: (params.eventTrigger || '').trim().slice(0, 80),
       createdBy: params.actorUid,
       createdByName: params.actorName.slice(0, 150),
       updatedBy: params.actorUid,
@@ -214,6 +264,17 @@ export async function updateCarePlanItem(params: {
   intervalUnit: RecurrenceUnit;
   intervalValue: number;
   sortOrder: number;
+  careInformationId?: string;
+  category?: CareCategory;
+  requiresApproval?: boolean;
+  requiresVeterinaryApproval?: boolean;
+  scheduleMode?: CareScheduleMode;
+  ageReference?: CareAgeReference;
+  selectedWeekdays?: number[];
+  endDate?: string;
+  endAgeDays?: number | null;
+  occurrenceLimit?: number | null;
+  eventTrigger?: string;
   actorUid: string;
   actorName: string;
 }): Promise<void> {
@@ -243,6 +304,17 @@ export async function updateCarePlanItem(params: {
     intervalUnit: params.intervalUnit,
     intervalValue,
     sortOrder: params.sortOrder,
+    careInformationId: params.careInformationId || '',
+    category: params.category || (params.reminderType === 'vaccination' ? 'vaccination' : params.reminderType === 'medication' ? 'medication_health' : 'general'),
+    requiresApproval: params.requiresApproval || false,
+    requiresVeterinaryApproval: params.requiresVeterinaryApproval || false,
+    scheduleMode: params.scheduleMode || 'calendar',
+    ageReference: params.ageReference || 'placement',
+    selectedWeekdays: (params.selectedWeekdays || []).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6).slice(0, 7),
+    endDate: params.endDate || '',
+    endAgeDays: params.endAgeDays ?? null,
+    occurrenceLimit: params.occurrenceLimit ?? null,
+    eventTrigger: (params.eventTrigger || '').trim().slice(0, 80),
     updatedBy: params.actorUid,
     updatedAt: serverTimestamp(),
   };

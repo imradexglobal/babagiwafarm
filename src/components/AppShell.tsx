@@ -21,6 +21,7 @@ import {
   X,
   Waves,
   HeartPulse,
+  Database,
 } from 'lucide-react';
 import { hasDepartmentAccess, hasPermission } from '../domain/calculations.ts';
 import type { FirebaseSyncState } from '../lib/firebaseSync.ts';
@@ -38,7 +39,8 @@ export type NavSection =
   | 'accounts'
   | 'batches'
   | 'reports'
-  | 'settings';
+  | 'settings'
+  | 'importExport';
 
 interface AppShellProps {
   farm: Farm;
@@ -179,12 +181,22 @@ export const AppShell: React.FC<AppShellProps> = ({
         hasPermission(member, 'members', 'read') ||
         member.role === 'owner',
     },
+    {
+      id: 'importExport',
+      label: 'Data Import & Export',
+      icon: Database,
+      group: 'management',
+      visible:
+        member.role === 'owner' ||
+        hasPermission(member, 'settings', 'edit') ||
+        hasPermission(member, 'reports', 'export'),
+    },
   ];
 
   const visibleItems = navItems.filter((item) => item.visible);
   const currentLabel = visibleItems.find((i) => i.id === activeSection)?.label || 'Dashboard';
 
-  const isSecondaryActive = ['eggStore', 'accounts', 'batches', 'reports', 'settings'].includes(activeSection);
+  const isSecondaryActive = ['eggStore', 'accounts', 'batches', 'reports', 'settings', 'importExport'].includes(activeSection);
 
   const handleNavClick = (id: NavSection) => {
     onSelectSection(id);

@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDoc,
   limit,
   onSnapshot,
   orderBy,
@@ -12,9 +13,11 @@ import {
   calculateBirdAgeDays,
   computeDateWithOffset,
   computeNextDueDate,
+  computeNextDueDateAfterCompletion,
   formatDateInTimezone,
   generateId,
 } from '../domain/calculations.ts';
+import { buildCareScheduleMatch, expandCareScheduleCandidate, resolveBatchCareClassification, resolveCarePlanReferenceDate, stableCareOccurrenceId } from '../domain/careSchedule.ts';
 
 export { computeDateWithOffset, computeNextDueDate };
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
@@ -226,11 +229,13 @@ export async function updateFarmReminderStatus(params: {
     params.nextStatus === 'completed' &&
     params.reminder.intervalUnit &&
     params.reminder.intervalUnit !== 'once' &&
+    !params.reminder.preScheduledSeries &&
     params.reminder.batchId &&
     params.reminder.penId
   ) {
-    const nextDueDate = computeNextDueDate(
+    const nextDueDate = computeNextDueDateAfterCompletion(
       params.reminder.dueDate || resolvedDoneDate,
+      resolvedDoneDate,
       params.reminder.intervalUnit,
       params.reminder.intervalValue || 1
     );
@@ -399,6 +404,7 @@ export async function materializeCarePlanReminders(params: {
   batch: PoultryBatch;
   carePlans: CarePlan[];
   carePlanItems: CarePlanItem[];
+  careInformation?: import('../types/farm.ts').CareInformation[];
   actorUid: string;
   actorName: string;
   timeZone?: string;
@@ -409,18 +415,65 @@ export async function materializeCarePlanReminders(params: {
     return plan && plan.status === 'active';
   });
 
-  if (eligibleItems.length === 0) return 0;
+  const matchedCandidates = params.careInformation
+    ? buildCareScheduleMatch({
+        batch: params.batch,
+        plans: params.carePlans,
+        planItemsByPlanId: Object.fromEntries(
+          params.carePlans.map((plan) => [plan.id, eligibleItems.filter((item) => item.carePlanId === plan.id)])
+        ),
+        careInformation: params.careInformation,
+      }).candidates
+    : null;
+
+  if ((matchedCandidates || eligibleItems).length === 0) return 0;
 
   const baseDate = params.batch.placementDate || formatDateInTimezone(new Date(), params.timeZone);
-  const batchWrite = writeBatch(db);
-  let count = 0;
+  const classification = resolveBatchCareClassification(params.batch);
+  const candidates = matchedCandidates || eligibleItems.map((item) => {
+    const plan = planById.get(item.carePlanId);
+    const referenceDate = resolveCarePlanReferenceDate(params.batch, item.ageReference || plan?.schedulingReference || 'placement');
+    return {
+      source: 'plan' as const,
+      sourcePlanId: item.carePlanId,
+      sourceItemId: item.id,
+      careInformationId: item.careInformationId || '',
+      title: item.title,
+      reminderType: item.reminderType,
+      category: item.category || 'general' as const,
+      dosageOrAction: item.dosageOrAction || '',
+      notes: item.notes || '',
+      offsetDays: item.offsetDays || 0,
+      intervalUnit: item.intervalUnit || 'once' as const,
+      intervalValue: item.intervalValue || 1,
+      occurrenceLimit: item.occurrenceLimit ?? null,
+      endAgeDays: item.endAgeDays ?? null,
+      requiresApproval: item.requiresApproval || false,
+      requiresVeterinaryApproval: item.requiresVeterinaryApproval || false,
+      dueDate: computeDateWithOffset(referenceDate || baseDate, item.offsetDays || 0),
+    };
+  });
 
-  for (const item of eligibleItems) {
-    const id = generateId('rem');
-    const firstDueDate = computeDateWithOffset(baseDate, item.offsetDays);
-    const targetAgeDays = computeOptionalTargetAgeDays(params.batch, firstDueDate);
-
-    batchWrite.set(doc(db, 'farms', params.farmId, 'farmReminders', id), {
+  const occurrences = candidates.flatMap((candidate) => expandCareScheduleCandidate(candidate));
+  const pendingWrites = (await Promise.all(occurrences.map(async (occurrence) => {
+    const activityId = occurrence.sourceItemId || occurrence.careInformationId;
+    const id = stableCareOccurrenceId({
+      batchId: params.batch.id,
+      carePlanId: occurrence.sourcePlanId,
+      activityId,
+      dueDate: occurrence.dueDate,
+      occurrenceIndex: occurrence.occurrenceIndex,
+    });
+    const reminderRef = doc(db, 'farms', params.farmId, 'farmReminders', id);
+    if ((await getDoc(reminderRef)).exists()) return null;
+    const parentReminderId = stableCareOccurrenceId({
+      batchId: params.batch.id,
+      carePlanId: occurrence.sourcePlanId,
+      activityId,
+      dueDate: occurrence.parentDueDate,
+      occurrenceIndex: 0,
+    });
+    const reminder = {
       id,
       farmId: params.farmId,
       batchId: params.batch.id,
@@ -428,46 +481,65 @@ export async function materializeCarePlanReminders(params: {
       penId: params.batch.penId,
       penNameSnapshot: params.batch.penNameSnapshot.slice(0, 80),
       milestoneKey: '',
-      reminderType: item.reminderType,
-      title: item.title,
-      dueDate: firstDueDate,
-      targetAgeDays,
-      dosageOrAction: item.dosageOrAction || '',
-      notes: item.notes || '',
-      status: 'pending',
+      reminderType: occurrence.reminderType,
+      title: occurrence.title,
+      dueDate: occurrence.dueDate,
+      targetAgeDays: computeOptionalTargetAgeDays(params.batch, occurrence.dueDate),
+      dosageOrAction: occurrence.dosageOrAction,
+      notes: occurrence.notes,
+      status: 'pending' as const,
       completedAtDate: '',
       completedBy: '',
       completedByName: '',
-      carePlanId: item.carePlanId,
-      carePlanItemId: item.id,
-      intervalUnit: item.intervalUnit,
-      intervalValue: item.intervalValue || 1,
-      occurrenceIndex: 0,
-      parentReminderId: id,
+      carePlanId: occurrence.sourcePlanId,
+      carePlanItemId: occurrence.sourceItemId,
+      careInformationId: occurrence.careInformationId,
+      category: occurrence.category,
+      animalTypeSnapshot: classification.animalType,
+      productionTypeSnapshot: classification.productionType,
+      productionStageSnapshot: classification.productionStage,
+      sourcePlanNameSnapshot: planById.get(occurrence.sourcePlanId)?.name || '',
+      sourceActivityTitleSnapshot: occurrence.title,
+      requiresApproval: occurrence.requiresApproval || occurrence.requiresVeterinaryApproval,
+      requiresVeterinaryApproval: occurrence.requiresVeterinaryApproval,
+      approvalStatus: occurrence.requiresApproval || occurrence.requiresVeterinaryApproval ? 'pending' as const : 'not_required' as const,
+      intervalUnit: occurrence.intervalUnit,
+      intervalValue: occurrence.intervalValue || 1,
+      occurrenceIndex: occurrence.occurrenceIndex,
+      parentReminderId,
+      preScheduledSeries: occurrence.intervalUnit !== 'once' && (occurrence.occurrenceLimit !== null || occurrence.endAgeDays !== null),
       createdBy: params.actorUid,
       createdByName: params.actorName.slice(0, 150),
       updatedBy: params.actorUid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
-    count++;
-  }
-
-  const audit = buildAuditLogEntry({
-    farmId: params.farmId,
-    entityType: 'batch',
-    entityId: params.batch.id,
-    action: 'update',
-    summary: `Materialized ${count} scheduled care plan task(s) for batch ${params.batch.batchCode}`,
-    after: { carePlanRemindersCount: count },
-    actorUid: params.actorUid,
-    actorName: params.actorName,
-  });
-  batchWrite.set(audit.ref, audit.data);
+    };
+    return { ref: reminderRef, data: reminder };
+  }))).filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
   try {
-    await batchWrite.commit();
-    return count;
+    for (let start = 0; start < pendingWrites.length; start += 450) {
+      const batchWrite = writeBatch(db);
+      pendingWrites.slice(start, start + 450).forEach(({ ref, data }) => batchWrite.set(ref, data));
+      await batchWrite.commit();
+    }
+    const count = pendingWrites.length;
+    if (count > 0) {
+      const audit = buildAuditLogEntry({
+        farmId: params.farmId,
+        entityType: 'batch',
+        entityId: params.batch.id,
+        action: 'update',
+        summary: `Materialized ${count} scheduled care plan occurrence(s) for batch ${params.batch.batchCode}`,
+        after: { carePlanRemindersCount: count },
+        actorUid: params.actorUid,
+        actorName: params.actorName,
+      });
+      const auditBatch = writeBatch(db);
+      auditBatch.set(audit.ref, audit.data);
+      await auditBatch.commit();
+    }
+    return pendingWrites.length;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/farmReminders`);
     return 0;

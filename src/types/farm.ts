@@ -48,6 +48,10 @@ export interface EggStorePermission {
   dispose: boolean;
 }
 
+export interface CarePermission {
+  approve: boolean;
+}
+
 export interface PermissionsMatrix {
   batches: CrudPermission;
   production: ProductionPermission;
@@ -57,6 +61,7 @@ export interface PermissionsMatrix {
   settings: SettingsPermission;
   members: MembersPermission;
   eggStore: EggStorePermission;
+  care: CarePermission;
 }
 
 export interface UserFarmBinding {
@@ -199,6 +204,9 @@ export interface PoultryBatch {
   penId: string;
   penNameSnapshot: string;
   birdType: string;
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
   breed: string;
   strain?: string;
   source: string;
@@ -612,8 +620,58 @@ export type DateFilterPreset =
   | 'ytd'
   | 'custom';
 
-export type ReminderType = 'vaccination' | 'medication' | 'milestone';
-export type ReminderStatus = 'pending' | 'completed' | 'dismissed';
+export type ReminderType =
+  | 'vaccination' | 'medication' | 'milestone' | 'feeding' | 'maintenance'
+  | 'inspection' | 'cleaning' | 'water_management' | 'animal_management'
+  | 'biosecurity' | 'monitoring' | 'general';
+export type ReminderStatus = 'pending' | 'in_progress' | 'completed' | 'dismissed' | 'skipped' | 'cancelled' | 'pending_approval';
+export type CareCategory =
+  | 'vaccination' | 'medication_health' | 'cleaning_sanitation' | 'water_management'
+  | 'animal_management' | 'facility_maintenance' | 'biosecurity' | 'monitoring_production' | 'general';
+export type AnimalApplicability = 'specific' | 'all';
+export type CareAgeReference = 'placement' | 'hatch' | 'custom';
+export type CareScheduleMode = 'calendar' | 'age' | 'stage' | 'event';
+
+export interface CareInformation {
+  id: string;
+  farmId: string;
+  title: string;
+  category: CareCategory;
+  reminderType: ReminderType;
+  animalApplicability: AnimalApplicability;
+  animalTypes: string[];
+  productionTypes: string[];
+  productionStages: string[];
+  instructions: string;
+  notes: string;
+  autoIncludeGeneral: boolean;
+  requiresVeterinaryApproval: boolean;
+  requiresApproval: boolean;
+  defaultOffsetDays: number;
+  defaultIntervalUnit: RecurrenceUnit;
+  defaultIntervalValue: number;
+  status: 'active' | 'inactive';
+  createdBy: string;
+  createdByName: string;
+  updatedBy: string;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+export interface CareExecutionDetails {
+  productName: string;
+  dosage: string;
+  route: string;
+  treatedCount: number | null;
+  lotNumber: string;
+  expiryDate: string;
+  administrationDate: string;
+  responsiblePerson: string;
+  veterinarian: string;
+  withdrawalPeriodDays: number | null;
+  observations: string;
+  adverseReactions: string;
+}
 
 export interface FarmReminder {
   id: string;
@@ -639,6 +697,20 @@ export interface FarmReminder {
   createdAt: unknown;
   updatedAt: unknown;
   // Care plan linkage
+  careInformationId?: string;
+  category?: CareCategory;
+  animalTypeSnapshot?: string;
+  productionTypeSnapshot?: string;
+  productionStageSnapshot?: string;
+  sourcePlanNameSnapshot?: string;
+  sourceActivityTitleSnapshot?: string;
+  requiresApproval?: boolean;
+  requiresVeterinaryApproval?: boolean;
+  approvalStatus?: "not_required" | "pending" | "approved" | "rejected";
+  approvedBy?: string;
+  approvedByName?: string;
+  approvedAt?: unknown;
+  execution?: CareExecutionDetails;
   carePlanId?: string;
   carePlanItemId?: string;
   // Recurrence
@@ -646,6 +718,7 @@ export interface FarmReminder {
   intervalValue?: number;
   occurrenceIndex?: number;    // 0-based, which repetition this is
   parentReminderId?: string;   // id of the first occurrence in this series
+  preScheduledSeries?: boolean; // template recurrence was materialized as a bounded set
 }
 
 export interface CarePlanItem {
@@ -653,6 +726,17 @@ export interface CarePlanItem {
   carePlanId: string;
   farmId: string;
   title: string;              // max 140 chars
+  careInformationId?: string;
+  category?: CareCategory;
+  requiresApproval?: boolean;
+  requiresVeterinaryApproval?: boolean;
+  scheduleMode?: CareScheduleMode;
+  ageReference?: CareAgeReference;
+  selectedWeekdays?: number[];
+  endDate?: string;
+  endAgeDays?: number | null;
+  occurrenceLimit?: number | null;
+  eventTrigger?: string;
   reminderType: ReminderType; // reuse existing type
   dosageOrAction: string;     // max 140 chars
   notes: string;              // max 500 chars
@@ -675,6 +759,12 @@ export interface CarePlan {
   name: string;               // max 100 chars
   description: string;        // max 300 chars
   planType: 'medication' | 'vaccination' | 'activity';
+  animalType?: string;
+  productionType?: string;
+  productionStage?: string;
+  productionStages?: string[];
+  schedulingReference?: CareAgeReference;
+  isLegacyDraft?: boolean;
   status: 'active' | 'inactive';
   createdBy: string;
   createdByName: string;

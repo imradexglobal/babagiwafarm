@@ -629,18 +629,9 @@ test('buildBatchRemindersTimeline computes standard poultry milestones, skips pr
   assert.equal(b1Day7[0].status, 'completed');
   assert.equal(b1Day7[0].persistedId, 'rem_std_7');
 
-  // For b1: std_day_14 is due_today
-  const b1Day14 = allItems.find((i) => i.batchId === 'b1' && i.milestoneKey === 'std_day_14');
-  assert.ok(b1Day14);
-  assert.equal(b1Day14.urgency, 'due_today');
-  assert.equal(b1Day14.dueDate, '2026-11-15');
-  assert.equal(b1Day14.daysUntilDue, 0);
-
-  // For b1: std_day_21 is due_soon (+7d)
-  const b1Day21 = allItems.find((i) => i.batchId === 'b1' && i.milestoneKey === 'std_day_21');
-  assert.ok(b1Day21);
-  assert.equal(b1Day21.urgency, 'due_soon');
-  assert.equal(b1Day21.daysUntilDue, 7);
+  // The inactive legacy standard schedule is review data only; no virtual due dates are synthesized.
+  assert.equal(allItems.some((i) => i.batchId === 'b1' && i.milestoneKey === 'std_day_14'), false);
+  assert.equal(allItems.some((i) => i.batchId === 'b1' && i.milestoneKey === 'std_day_21'), false);
 
   // For b2: pre-placement Day 7..84 chick milestones must NOT appear
   const b2Early = allItems.filter(

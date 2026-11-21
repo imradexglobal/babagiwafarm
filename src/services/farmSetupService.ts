@@ -1,7 +1,9 @@
 import {
   collection,
   doc,
+  getDocs,
   limit,
+  where,
   onSnapshot,
   orderBy,
   query,
@@ -9,7 +11,8 @@ import {
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
-import { DEFAULT_BAG_WEIGHT_KG, DEFAULT_STAFF_PERMISSIONS, OWNER_FULL_PERMISSIONS, generateId, isFarmOwnerTitle, toEmailKey } from '../domain/calculations.ts';
+import { DEFAULT_BAG_WEIGHT_KG, DEFAULT_STAFF_PERMISSIONS, OWNER_FULL_PERMISSIONS, generateId, isFarmOwnerTitle, normalizePermissions, toEmailKey } from '../domain/calculations.ts';
+import { buildUserDocumentId, sendStaffSignInLink } from './authService.ts';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase.ts';
 import type {
   AuditLog,
@@ -180,6 +183,25 @@ export async function updatePen(params: {
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/pens/${params.pen.id}`);
   }
+}
+
+export async function deactivateUnusedPen(params: { farmId: string; pen: Pen; actorUid: string; actorName: string }): Promise<void> {
+  if (params.pen.activeBatchId) throw new Error('This pen has an active batch and cannot be deactivated.');
+  const used = await getDocs(query(collection(db, 'farms', params.farmId, 'batches'), where('penId', '==', params.pen.id), limit(1)));
+  if (!used.empty) throw new Error('This pen has been used by a batch and cannot be deactivated from this shortcut.');
+  await updatePen({
+    farmId: params.farmId,
+    pen: params.pen,
+    name: params.pen.name,
+    code: params.pen.code,
+    capacity: params.pen.capacity,
+    notes: params.pen.notes,
+    status: 'inactive',
+    department: params.pen.department,
+    assignedMemberUids: params.pen.assignedMemberUids,
+    actorUid: params.actorUid,
+    actorName: params.actorName,
+  });
 }
 
 export async function createFeedItem(params: {
@@ -402,6 +424,12 @@ export async function updateSalesUnit(params: {
   }
 }
 
+export interface CreateStaffInviteResult {
+  inviteId: string;
+  emailSent: boolean;
+  emailError: string | null;
+}
+
 export async function createStaffInvite(params: {
   farmId: string;
   farmName: string;
@@ -412,7 +440,7 @@ export async function createStaffInvite(params: {
   assignedPenIds?: string[];
   actorUid: string;
   actorName: string;
-}): Promise<string> {
+}): Promise<CreateStaffInviteResult> {
   const emailLower = params.email.trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
     throw new Error('Please enter a valid staff email address.');
@@ -429,7 +457,10 @@ export async function createStaffInvite(params: {
     ? ['poultry', 'fishery', 'crops', 'livestock', 'general'] as DepartmentType[]
     : (params.departments && params.departments.length > 0 ? params.departments : ['poultry' as DepartmentType]);
   const assignedPenIds = isOwner ? [] : (params.assignedPenIds || []);
-  const permissions = isOwner ? OWNER_FULL_PERMISSIONS : (params.permissions || DEFAULT_STAFF_PERMISSIONS);
+  // Normalize permissions: merge with defaults so every required key (incl. eggStore, care) is present.
+  // This prevents isValidPermissions() from failing for invites created before schema upgrades.
+  const rawPerms = isOwner ? OWNER_FULL_PERMISSIONS : (params.permissions || DEFAULT_STAFF_PERMISSIONS);
+  const permissions = isOwner ? OWNER_FULL_PERMISSIONS : normalizePermissions(rawPerms);
 
   const pendingInvite = {
     emailKey,
@@ -477,17 +508,86 @@ export async function createStaffInvite(params: {
     actorName: params.actorName,
   });
   try {
-    // Do not read pendingInvites/{emailKey} here: Firestore intentionally
-    // restricts that global document to the invitee. A write-only batch keeps
-    // invite creation atomic; rules still deny overwriting an existing invite.
+    // DEBUG: log the exact permissions going into the invite to catch schema mismatches.
+    console.log('[createStaffInvite] permissions being written:', JSON.stringify(permissions));
+    console.log('[createStaffInvite] pendingInvite keys:', Object.keys(pendingInvite));
+
+    // For re-inviting a revoked/rejected email we must DELETE the stale pendingInvites doc first,
+    // then CREATE it fresh — Firestore's allow create rule is simpler/safer than the update re-invite
+    // branch and avoids any existing-doc field constraint mismatch.
+    // We use two sequential single-op writes so we can pinpoint which one fails.
+    try {
+      const { deleteDoc: firestoreDeleteDoc } = await import('firebase/firestore');
+      await firestoreDeleteDoc(pendingRef);
+      console.log('[createStaffInvite] stale pendingInvite deleted (re-invite path)');
+    } catch (delErr: unknown) {
+      // For a brand-new email this will fail with permission-denied (no doc to delete) — expected.
+      // For a revoked invite this must succeed; if it fails, log it clearly.
+      const code = (delErr as { code?: string })?.code;
+      if (code === 'permission-denied') {
+        console.log('[createStaffInvite] delete not permitted (new email or already clean) — proceeding with create');
+      } else {
+        console.warn('[createStaffInvite] delete step error (non-permission):', delErr);
+      }
+    }
+
+    // Now write the three docs individually so we can see exactly which one fails.
+    try {
+      const { setDoc: firestoreSetDoc } = await import('firebase/firestore');
+      await firestoreSetDoc(pendingRef, pendingInvite);
+      console.log('[createStaffInvite] pendingInvites write OK');
+    } catch (setErr) {
+      console.error('[createStaffInvite] pendingInvites write FAILED:', setErr);
+      throw setErr;
+    }
+
     const batch = writeBatch(db);
-    batch.set(pendingRef, pendingInvite);
     batch.set(inviteRef, farmInvite);
     batch.set(audit.ref, audit.data);
     await batch.commit();
-    return inviteId;
+    console.log('[createStaffInvite] farmInvite + audit batch OK');
+
+    let emailSent = false;
+    let emailError: string | null = null;
+    try {
+      await sendStaffSignInLink(emailLower);
+      emailSent = true;
+    } catch (err) {
+      console.warn('Could not dispatch sign-in magic link email:', err);
+      emailError = err instanceof Error ? err.message : String(err);
+    }
+
+    return { inviteId, emailSent, emailError };
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/invites/${inviteId}`);
+    throw err;
+  }
+}
+
+export async function resendStaffInviteEmail(params: {
+  farmId: string;
+  invite: FarmInvite;
+  actorUid: string;
+  actorName: string;
+}): Promise<void> {
+  await sendStaffSignInLink(params.invite.emailLower);
+  const audit = buildAuditLogEntry({
+    farmId: params.farmId,
+    entityType: 'invite',
+    entityId: params.invite.id,
+    action: 'status_change',
+    summary: `Resent sign-in email link to ${params.invite.emailLower}`,
+    before: { email: params.invite.emailLower },
+    after: { email: params.invite.emailLower, emailSentAt: new Date().toISOString() },
+    actorUid: params.actorUid,
+    actorName: params.actorName,
+  });
+  const batch = writeBatch(db);
+  batch.set(audit.ref, audit.data);
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `farms/${params.farmId}/auditLogs`);
   }
 }
 
@@ -523,6 +623,17 @@ export async function revokeStaffInvite(params: {
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `farms/${params.farmId}/invites/${params.invite.id}`);
   }
+}
+
+export async function deleteStaffMember(params: { farmId: string; target: FarmMember; actorUid: string; actorName: string }): Promise<void> {
+  if (params.target.role === 'owner' || params.target.uid === params.actorUid) throw new Error('The farm owner or your own access cannot be deleted.');
+  const batch = writeBatch(db);
+  batch.delete(doc(db, 'farms', params.farmId, 'members', params.target.uid));
+  batch.delete(doc(db, 'userBindings', params.target.uid));
+  batch.delete(doc(db, 'users', buildUserDocumentId(params.farmId, params.target.displayName)));
+  const audit = buildAuditLogEntry({ farmId: params.farmId, entityType: 'member', entityId: params.target.uid, action: 'delete', summary: 'Removed farm access for ' + params.target.displayName + '; reinvitation is required to restore access', before: { email: params.target.email, status: params.target.status }, after: {}, actorUid: params.actorUid, actorName: params.actorName });
+  batch.set(audit.ref, audit.data);
+  try { await batch.commit(); } catch (err) { handleFirestoreError(err, OperationType.DELETE, 'farms/' + params.farmId + '/members/' + params.target.uid); }
 }
 
 export async function updateStaffMember(params: {

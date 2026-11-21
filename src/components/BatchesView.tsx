@@ -17,7 +17,7 @@ import {
   hasPermission,
 } from '../domain/calculations.ts';
 import { formatUserFriendlyError } from '../lib/firebase.ts';
-import { closeoutBatch, createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
+import { archiveUnusedBatch, closeoutBatch, createBatch, deactivateBatch, updateBatch } from '../services/batchService.ts';
 import { getCarePlanItemsForPlans } from '../services/carePlanService.ts';
 import { materializeCarePlanReminders } from '../services/remindersService.ts';
 import type {
@@ -259,6 +259,12 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
   const handleResetAutoBatchCode = () => {
     setBatchCodeManual(false);
     setBatchCode(computeAutoBatchCode(penId, placementDate));
+  };
+
+  const handleDeleteBatch = async (batch: PoultryBatch) => {
+    if (!window.confirm('Archive unused batch "' + batch.batchCode + '"? The batch will be marked inactive; its code and history will be preserved.')) return;
+    try { await archiveUnusedBatch({ farmId: farm.farmId, batch, actorUid: member.uid, actorName: member.displayName }); }
+    catch (err) { setFeedback({ type: 'error', text: formatUserFriendlyError(err) }); }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -847,6 +853,11 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                           >
                             <Edit2 className="h-3.5 w-3.5" />
                             <span>Edit</span>
+                          </button>
+                        )}
+                        {canDelete && b.status === 'active' && !b.closeoutSummary && (
+                          <button type="button" onClick={() => void handleDeleteBatch(b)} className="mr-1 inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">
+                            Archive
                           </button>
                         )}
                         {canDelete && (
